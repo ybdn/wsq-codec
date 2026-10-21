@@ -1,0 +1,14 @@
+[package]
+name = "wsq-codec"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Decoder and encoder for WSQ (Wavelet Scalar Quantization) fingerprint images"
+license = "MIT"
+repository = "https://github.com/ybdn/wsq-codec"
+readme = "README.md"
+keywords = ["wsq", "fingerprint", "biometrics", "image", "codec"]
+categories = ["multimedia::images", "compression"]
+publish = false
+
+[dependencies]
