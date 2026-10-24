@@ -10,11 +10,18 @@ env:
 
 jobs:
   test:
-    name: test (${{ matrix.toolchain }})
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         toolchain: [stable, "1.85"]
+        include:
+          - os: macos-latest
+            toolchain: stable
+          - os: windows-latest
+            toolchain: stable
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
