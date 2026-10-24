@@ -44,6 +44,8 @@ struct Fixture {
     height: usize,
     bitrate: f32,
     ppi: Option<u32>,
+    /// Comment handed to the encoder.
+    comment: Option<&'static [u8]>,
     /// Hash of the pixels the reference decoder produces.
     decoded: u64,
 }
@@ -57,6 +59,7 @@ const FIXTURES: &[Fixture] = &[
         height: 288,
         bitrate: 0.75,
         ppi: Some(500),
+        comment: None,
         decoded: 0x6085_0ff0_f7c8_5e04,
     },
     Fixture {
@@ -67,6 +70,7 @@ const FIXTURES: &[Fixture] = &[
         height: 255,
         bitrate: 2.25,
         ppi: Some(1000),
+        comment: None,
         decoded: 0xf646_cf9b_04f0_4c45,
     },
     Fixture {
@@ -77,9 +81,36 @@ const FIXTURES: &[Fixture] = &[
         height: 97,
         bitrate: 0.75,
         ppi: None,
+        comment: None,
         decoded: 0x3381_3f51_f197_5ea8,
     },
+    Fixture {
+        file: "rings_200x180_nistcom.wsq",
+        wsq: include_bytes!("data/rings_200x180_nistcom.wsq"),
+        kind: "rings",
+        width: 200,
+        height: 180,
+        bitrate: 0.75,
+        ppi: Some(500),
+        comment: Some(NISTCOM),
+        decoded: 0x735e_939c_b100_51d9,
+    },
+    Fixture {
+        file: "checker_150x140_comment.wsq",
+        wsq: include_bytes!("data/checker_150x140_comment.wsq"),
+        kind: "checker",
+        width: 150,
+        height: 140,
+        bitrate: 2.25,
+        ppi: None,
+        comment: Some(PLAIN),
+        decoded: 0x5524_cbd8_7390_da7b,
+    },
 ];
+
+/// Comments handed to the encoder, the same as in make_fixtures.py.
+const NISTCOM: &[u8] = b"NIST_COM 4\nSEX m\nPPI 1000\nFING_CLASS W";
+const PLAIN: &[u8] = b"Scanned by the test suite";
 
 const EVEN_FILTERS: Fixture = Fixture {
     file: "rings_300x211_even.wsq",
@@ -89,6 +120,7 @@ const EVEN_FILTERS: Fixture = Fixture {
     height: 211,
     bitrate: 0.75,
     ppi: Some(500),
+    comment: None,
     decoded: 0xb497_af5e_c6f5_cf5c,
 };
 
@@ -96,11 +128,12 @@ const EVEN_FILTERS: Fixture = Fixture {
 fn encodes_like_the_reference() {
     for f in FIXTURES {
         let pixels = pattern(f.kind, f.width, f.height, (f.width * f.height) as u32);
-        let options = EncodeOptions {
-            bitrate: f.bitrate,
-            ppi: f.ppi,
-            ..Default::default()
-        };
+        let mut options = EncodeOptions::default()
+            .with_bitrate(f.bitrate)
+            .with_ppi(f.ppi);
+        if let Some(comment) = f.comment {
+            options = options.with_comment(comment.to_vec());
+        }
         let wsq = encode(&pixels, f.width, f.height, &options).unwrap();
         assert!(wsq == f.wsq, "{}: encoded bytes differ", f.file);
     }

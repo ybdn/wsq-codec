@@ -20,7 +20,7 @@
 //!     .map(|i| (((i % width) * 7 + (i / width) * 3) % 200 + 20) as u8)
 //!     .collect();
 //!
-//! let options = wsq_codec::EncodeOptions { ppi: Some(500), ..Default::default() };
+//! let options = wsq_codec::EncodeOptions::default().with_ppi(Some(500));
 //! let wsq = wsq_codec::encode(&pixels, width, height, &options)?;
 //!
 //! let image = wsq_codec::decode(&wsq)?;
@@ -47,8 +47,13 @@ mod wavelet;
 
 pub use error::{DecodeError, EncodeError};
 
+/// Default for [`DecodeOptions::max_pixels`]: 100 million pixels, which
+/// covers a 1000 ppi palm print (about 44 million) with room to spare.
+pub const DEFAULT_MAX_PIXELS: usize = 100_000_000;
+
 /// A decoded 8-bit grayscale image.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Image {
     /// Width in pixels.
     pub width: usize,
@@ -63,6 +68,7 @@ pub struct Image {
 
 /// What a WSQ stream says about its image, read without decoding it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Info {
     /// Width in pixels.
     pub width: usize,
@@ -78,17 +84,67 @@ pub struct Info {
     pub comments: Vec<Vec<u8>>,
 }
 
+/// Decoder settings.
+///
+/// ```
+/// let options = wsq_codec::DecodeOptions::default().with_max_pixels(Some(20_000_000));
+/// # let _ = options;
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DecodeOptions {
+    /// Largest `width * height` the decoder accepts, or `None` for no
+    /// limit. Decoding needs about 11 bytes per pixel at its peak, and the
+    /// frame header alone decides the size, so a small crafted stream can
+    /// otherwise claim an image of several gigapixels.
+    pub max_pixels: Option<usize>,
+}
+
+impl Default for DecodeOptions {
+    fn default() -> Self {
+        DecodeOptions {
+            max_pixels: Some(DEFAULT_MAX_PIXELS),
+        }
+    }
+}
+
+impl DecodeOptions {
+    /// Sets [`max_pixels`](Self::max_pixels).
+    pub fn with_max_pixels(mut self, max_pixels: Option<usize>) -> Self {
+        self.max_pixels = max_pixels;
+        self
+    }
+}
+
 /// Encoder settings.
+///
+/// ```
+/// let options = wsq_codec::EncodeOptions::default()
+///     .with_bitrate(2.25)
+///     .with_ppi(Some(1000))
+///     .with_comment(b"scanned on site".to_vec());
+/// # let _ = options;
+/// ```
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EncodeOptions {
     /// Target bit rate in bits per pixel. 0.75, the usual choice for 500 ppi
     /// fingerprints, gives about 15:1 compression; 2.25 gives about 5:1.
     pub bitrate: f32,
-    /// Scanning resolution to record, or `None` for unknown.
+    /// Scanning resolution to record, or `None` for unknown. Zero is
+    /// rejected.
     pub ppi: Option<u32>,
-    /// Extra comment segments, written after the NISTCOM comment the
-    /// encoder always writes.
+    /// Extra comment segments. The encoder always writes a NISTCOM comment
+    /// describing the image; the first of these comments that is itself a
+    /// NISTCOM comment (it starts with `NIST_COM`) is merged into it, as
+    /// the reference implementation does: its other fields are kept, and
+    /// the encoder's own fields (dimensions, depth, `PPI`, `LOSSY`,
+    /// colorspace, compression, bit rate) replace any it gives. The others
+    /// are written as they are, after it.
     pub comments: Vec<Vec<u8>>,
+    /// Implementation number the FBI assigned to the encoder, written in
+    /// the frame header. 0, the default, means unassigned.
+    pub software: u16,
 }
 
 impl Default for EncodeOptions {
@@ -97,13 +153,46 @@ impl Default for EncodeOptions {
             bitrate: 0.75,
             ppi: None,
             comments: Vec::new(),
+            software: 0,
         }
     }
 }
 
-/// Decodes a WSQ stream.
+impl EncodeOptions {
+    /// Sets [`bitrate`](Self::bitrate).
+    pub fn with_bitrate(mut self, bitrate: f32) -> Self {
+        self.bitrate = bitrate;
+        self
+    }
+
+    /// Sets [`ppi`](Self::ppi).
+    pub fn with_ppi(mut self, ppi: Option<u32>) -> Self {
+        self.ppi = ppi;
+        self
+    }
+
+    /// Appends a comment to [`comments`](Self::comments).
+    pub fn with_comment(mut self, comment: Vec<u8>) -> Self {
+        self.comments.push(comment);
+        self
+    }
+
+    /// Sets [`software`](Self::software).
+    pub fn with_software(mut self, software: u16) -> Self {
+        self.software = software;
+        self
+    }
+}
+
+/// Decodes a WSQ stream with the default [`DecodeOptions`], which reject
+/// images of more than [`DEFAULT_MAX_PIXELS`] pixels.
 pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
-    decode::decode(data)
+    decode_with(data, &DecodeOptions::default())
+}
+
+/// Decodes a WSQ stream.
+pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
+    decode::decode(data, options)
 }
 
 /// Reads the dimensions, resolution and comments of a WSQ stream without
