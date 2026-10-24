@@ -4,7 +4,9 @@
 //! way the NIST reference implementation does, instead of computing
 //! reflected indices directly. Reproducing that walk, including the order
 //! in which products are accumulated in single precision, is what lets the
-//! output match the reference implementation bit for bit.
+//! output match the reference implementation bit for bit. The walk is
+//! recorded once per line length as a [`Plan`], which then filters many
+//! rows or columns side by side.
 
 use crate::tree::{W_TREE_LEN, WNode};
 
@@ -89,12 +91,148 @@ impl Walk {
     }
 }
 
-/// Splits one line into its low-pass half followed by its high-pass half
-/// (or the reverse when `inv` is set). `dst` must be as long as `src`.
-fn analyze_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bool) {
-    let n = src.len();
+/// One product of a filter: input sample `src` times `coef` times `sfac`.
+#[derive(Clone, Copy)]
+struct Term {
+    src: usize,
+    coef: f32,
+    sfac: f32,
+}
+
+/// Computes output sample `at` from `terms`, either from scratch or by
+/// adding them to what the output already holds.
+struct Op {
+    at: usize,
+    accumulate: bool,
+    terms: std::ops::Range<usize>,
+}
+
+/// The operations filtering a line of a given length performs, in order.
+///
+/// Which input samples each output reads depends only on the line length,
+/// the filters and the band order, so a plan is worked out once and then
+/// applied to every row of a region, or to all of its columns at once.
+/// Each output sample goes through the same products and sums in the same
+/// order as the walk that built the plan.
+struct Plan {
+    len: usize,
+    ops: Vec<Op>,
+    terms: Vec<Term>,
+}
+
+impl Plan {
+    fn new(len: usize) -> Self {
+        Plan {
+            len,
+            ops: Vec::new(),
+            terms: Vec::new(),
+        }
+    }
+
+    /// Records an operation. Outputs past the end of the line, which only
+    /// degenerate filter banks produce, are dropped.
+    fn push(&mut self, at: usize, accumulate: bool, terms: impl IntoIterator<Item = Term>) {
+        if at >= self.len {
+            return;
+        }
+        let start = self.terms.len();
+        self.terms.extend(terms);
+        let end = self.terms.len();
+        self.ops.push(Op {
+            at,
+            accumulate,
+            terms: start..end,
+        });
+    }
+
+    /// Filters `rows` rows. Row `r` of the input starts in `src` at
+    /// `src_row(r)`, and row `r` of the output in `dst` at `dst_row(r)`.
+    ///
+    /// Rows go through [`apply_columns`](Self::apply_columns) in blocks,
+    /// transposed, which filters them side by side.
+    fn apply_rows(
+        &self,
+        src: &[f32],
+        src_row: impl Fn(usize) -> usize,
+        dst: &mut [f32],
+        dst_row: impl Fn(usize) -> usize,
+        rows: usize,
+    ) {
+        const BLOCK: usize = 64;
+        let n = self.len;
+        let mut tin = vec![0.0f32; n * BLOCK];
+        let mut tout = vec![0.0f32; n * BLOCK];
+        let mut starts = [0usize; BLOCK];
+        for first in (0..rows).step_by(BLOCK) {
+            let count = BLOCK.min(rows - first);
+            // Transposing a sample of every row at a time keeps the rows
+            // being read in cache.
+            for (b, start) in starts[..count].iter_mut().enumerate() {
+                *start = src_row(first + b);
+            }
+            for (k, line) in tin.chunks_exact_mut(BLOCK).enumerate() {
+                for (v, &start) in line.iter_mut().zip(&starts[..count]) {
+                    *v = src[start + k];
+                }
+            }
+            self.apply_columns(&tin, |k| k * BLOCK, &mut tout, |k| k * BLOCK, count);
+            for (b, start) in starts[..count].iter_mut().enumerate() {
+                *start = dst_row(first + b);
+            }
+            for (k, line) in tout.chunks_exact(BLOCK).enumerate() {
+                for (&v, &start) in line.iter().zip(&starts[..count]) {
+                    dst[start + k] = v;
+                }
+            }
+        }
+    }
+
+    /// Filters `cols` columns at once. Sample `k` of every input column
+    /// lies in `src` from `src_row(k)` on, and sample `k` of every output
+    /// column in `dst` from `dst_row(k)` on.
+    fn apply_columns(
+        &self,
+        src: &[f32],
+        src_row: impl Fn(usize) -> usize,
+        dst: &mut [f32],
+        dst_row: impl Fn(usize) -> usize,
+        cols: usize,
+    ) {
+        for k in 0..self.len {
+            let d = dst_row(k);
+            dst[d..d + cols].fill(0.0);
+        }
+        for op in &self.ops {
+            let d = dst_row(op.at);
+            let out = &mut dst[d..d + cols];
+            let mut terms = self.terms[op.terms.clone()].iter();
+            if !op.accumulate {
+                match terms.next() {
+                    Some(t) => {
+                        let s = src_row(t.src);
+                        for (o, &x) in out.iter_mut().zip(&src[s..s + cols]) {
+                            *o = x * t.coef * t.sfac;
+                        }
+                    }
+                    None => out.fill(0.0),
+                }
+            }
+            for t in terms {
+                let s = src_row(t.src);
+                for (o, &x) in out.iter_mut().zip(&src[s..s + cols]) {
+                    *o += x * t.coef * t.sfac;
+                }
+            }
+        }
+    }
+}
+
+/// Plan for splitting a line of `n` samples into its low-pass half
+/// followed by its high-pass half (or the reverse when `inv` is set).
+fn analysis_plan(n: usize, lo: &[f32], hi: &[f32], inv: bool) -> Plan {
+    let mut plan = Plan::new(n);
     if n == 0 {
-        return;
+        return plan;
     }
     let odd_len = n % 2 == 1;
     let odd_filters = lo.len() % 2 == 1;
@@ -137,16 +275,25 @@ fn analyze_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bool)
     let (lo_out, hi_out) = if inv { (hlen, 0) } else { (0, llen) };
     let last = n as isize - 1;
 
-    let filter = |start: Walk, taps: &[f32]| -> f32 {
+    let filter = |plan: &mut Plan, at: usize, start: Walk, taps: &[f32]| {
         let mut w = start;
-        let mut acc = src[w.idx()] * taps[0];
-        for &tap in &taps[1..] {
+        let first = w.idx();
+        let rest = taps[1..].iter().map(move |&coef| {
             w.turn_left();
             w.turn_right(last);
             w.advance(last);
-            acc += src[w.idx()] * tap;
-        }
-        acc
+            (w.idx(), coef)
+        });
+        let terms = std::iter::once((first, taps[0])).chain(rest);
+        plan.push(
+            at,
+            false,
+            terms.map(|(src, coef)| Term {
+                src,
+                coef,
+                sfac: 1.0,
+            }),
+        );
     };
 
     let clamp = |p: isize| p.clamp(0, last);
@@ -164,8 +311,8 @@ fn analyze_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bool)
     };
 
     for pix in 0..hlen {
-        dst[lo_out + pix] = filter(lstart, lo);
-        dst[hi_out + pix] = filter(hstart, hi);
+        filter(&mut plan, lo_out + pix, lstart, lo);
+        filter(&mut plan, hi_out + pix, hstart, hi);
         for _ in 0..2 {
             lstart.turn_left();
             lstart.advance(last);
@@ -174,18 +321,19 @@ fn analyze_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bool)
         }
     }
     if odd_len {
-        dst[lo_out + hlen] = filter(lstart, lo);
+        filter(&mut plan, lo_out + hlen, lstart, lo);
     }
+    plan
 }
 
-/// Inverse of [`analyze_line`]: interleaves a low-pass and a high-pass half
-/// back into one line. `lo` and `hi` are the synthesis filters.
-fn synthesize_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bool) {
-    let n = src.len();
+/// Inverse of [`analysis_plan`]: plan for interleaving a low-pass and a
+/// high-pass half back into one line of `n` samples. `lo` and `hi` are the
+/// synthesis filters.
+fn synthesis_plan(n: usize, lo: &[f32], hi: &[f32], inv: bool) -> Plan {
+    let mut plan = Plan::new(n);
     if n == 0 {
-        return;
+        return plan;
     }
-    dst.fill(0.0);
     let odd_len = n % 2 == 1;
     let llen = n.div_ceil(2);
     let hlen = n / 2;
@@ -239,39 +387,42 @@ fn synthesize_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bo
         hi
     };
 
-    let (lo_src, hi_src) = if inv {
-        (&src[hlen..], &src[..hlen])
-    } else {
-        (&src[..llen], &src[llen..])
-    };
+    let (lo_src, hi_src) = if inv { (hlen, 0) } else { (0, llen) };
     let llast = llen as isize - 1;
     let hlast = hlen as isize - 1;
 
     // Low-pass taps assign each output sample...
-    let low = |dst: &mut [f32], at: usize, start: Walk, tap: usize| {
+    let low = |plan: &mut Plan, at: usize, start: Walk, tap: usize| {
         let mut w = start;
-        let mut acc = lo_src[w.idx()] * lo[tap];
-        for &coef in lo.iter().skip(tap + 2).step_by(2) {
+        let first = w.idx();
+        let rest = lo.iter().skip(tap + 2).step_by(2).map(move |&coef| {
             w.turn_left();
             w.turn_right(llast);
             w.advance(llast);
-            acc += lo_src[w.idx()] * coef;
-        }
-        if let Some(out) = dst.get_mut(at) {
-            *out = acc;
-        }
+            (w.idx(), coef)
+        });
+        let terms = std::iter::once((first, lo[tap])).chain(rest);
+        plan.push(
+            at,
+            false,
+            terms.map(|(i, coef)| Term {
+                src: lo_src + i,
+                coef,
+                sfac: 1.0,
+            }),
+        );
     };
     // ...and high-pass taps then add to it, one product at a time.
     // Returns the updated right-end counter, which only even-length
     // filter banks use.
-    let high = |dst: &mut [f32], at: usize, start: Walk, tap: usize, sfac0: f32, fhre0: i32| {
+    let high = |plan: &mut Plan, at: usize, start: Walk, tap: usize, sfac0: f32, fhre0: i32| {
         if hlen == 0 {
             return fhre0;
         }
         let mut w = start;
         let mut sfac = sfac0;
         let mut fhre = fhre0;
-        let mut acc = dst.get(at).copied().unwrap_or(0.0);
+        let mut terms = Vec::new();
         for &coef in hi.iter().skip(tap).step_by(2) {
             if w.turn_left() && w.step == 1 {
                 sfac = 1.0;
@@ -295,12 +446,14 @@ fn synthesize_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bo
                     }
                 }
             }
-            acc += hi_src[w.idx()] * coef * sfac;
+            terms.push(Term {
+                src: hi_src + w.idx(),
+                coef,
+                sfac,
+            });
             w.advance(hlast);
         }
-        if let Some(out) = dst.get_mut(at) {
-            *out = acc;
-        }
+        plan.push(at, true, terms);
         fhre
     };
 
@@ -325,7 +478,7 @@ fn synthesize_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bo
 
     for _ in 0..hlen {
         for tap in (0..=lstap).rev() {
-            low(dst, limg, lstart, tap);
+            low(&mut plan, limg, lstart, tap);
             limg += 1;
         }
         lstart.turn_left();
@@ -333,7 +486,7 @@ fn synthesize_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bo
         lstap = 1;
 
         for tap in (0..=hstap).rev() {
-            fhre = high(dst, himg, hstart, tap, osfac, ofhre);
+            fhre = high(&mut plan, himg, hstart, tap, osfac, ofhre);
             himg += 1;
         }
         if hstart.turn_left() && hstart.step == 1 {
@@ -350,7 +503,7 @@ fn synthesize_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bo
         (false, false) => 1,
     };
     for tap in (lstap..=1).rev() {
-        low(dst, limg, lstart, tap);
+        low(&mut plan, limg, lstart, tap);
         limg += 1;
     }
 
@@ -368,41 +521,24 @@ fn synthesize_line(src: &[f32], dst: &mut [f32], lo: &[f32], hi: &[f32], inv: bo
         if hsz != 2 {
             fhre = ofhre;
         }
-        fhre = high(dst, himg, hstart, tap, osfac, fhre);
+        fhre = high(&mut plan, himg, hstart, tap, osfac, fhre);
         himg += 1;
     }
+    plan
 }
 
 /// Forward transform of the whole image in place, one wavelet tree node
 /// at a time.
 pub(crate) fn decompose(data: &mut [f32], width: usize, tree: &[WNode; W_TREE_LEN]) {
     let mut tmp = vec![0.0f32; data.len()];
-    let mut line = Vec::new();
-    let mut out = Vec::new();
     for node in tree {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
         // Rows: image -> tmp.
-        for r in 0..leny {
-            let start = (y + r) * width + x;
-            let dst = &mut tmp[r * width..r * width + lenx];
-            analyze_line(
-                &data[start..start + lenx],
-                dst,
-                &LOFILT,
-                &HIFILT,
-                node.inv_rw,
-            );
-        }
+        let rows = analysis_plan(lenx, &LOFILT, &HIFILT, node.inv_rw);
+        rows.apply_rows(data, |r| (y + r) * width + x, &mut tmp, |r| r * width, leny);
         // Columns: tmp -> image.
-        for c in 0..lenx {
-            line.clear();
-            line.extend((0..leny).map(|r| tmp[r * width + c]));
-            out.resize(leny, 0.0);
-            analyze_line(&line, &mut out, &LOFILT, &HIFILT, node.inv_cl);
-            for (r, &v) in out.iter().enumerate() {
-                data[(y + r) * width + x + c] = v;
-            }
-        }
+        let cols = analysis_plan(leny, &LOFILT, &HIFILT, node.inv_cl);
+        cols.apply_columns(&tmp, |r| r * width, data, |r| (y + r) * width + x, lenx);
     }
 }
 
@@ -416,25 +552,13 @@ pub(crate) fn reconstruct(
     hi: &[f32],
 ) {
     let mut tmp = vec![0.0f32; data.len()];
-    let mut line = Vec::new();
-    let mut out = Vec::new();
     for node in tree.iter().rev() {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
         // Columns: image -> tmp.
-        for c in 0..lenx {
-            line.clear();
-            line.extend((0..leny).map(|r| data[(y + r) * width + x + c]));
-            out.resize(leny, 0.0);
-            synthesize_line(&line, &mut out, lo, hi, node.inv_cl);
-            for (r, &v) in out.iter().enumerate() {
-                tmp[r * width + c] = v;
-            }
-        }
+        let cols = synthesis_plan(leny, lo, hi, node.inv_cl);
+        cols.apply_columns(data, |r| (y + r) * width + x, &mut tmp, |r| r * width, lenx);
         // Rows: tmp -> image.
-        for r in 0..leny {
-            let start = (y + r) * width + x;
-            let src = &tmp[r * width..r * width + lenx];
-            synthesize_line(src, &mut data[start..start + lenx], lo, hi, node.inv_rw);
-        }
+        let rows = synthesis_plan(lenx, lo, hi, node.inv_rw);
+        rows.apply_rows(&tmp, |r| r * width, data, |r| (y + r) * width + x, leny);
     }
 }

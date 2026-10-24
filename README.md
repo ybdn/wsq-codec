@@ -84,8 +84,19 @@ The encoder departs from NBIS only where NBIS's output is broken:
 The decoder rejects streams whose blocks hold fewer coefficients than the subbands need, where
 NBIS would read uninitialized memory.
 
-Byte-identical encoding relies on the platform's `pow` and `log` agreeing with glibc's, which
-holds on Linux; elsewhere an occasional quantizer bin may differ in its last digit.
+Byte-identical encoding relies on the platform's `pow` and `log` rounding like glibc's. CI
+checks it on Linux, macOS and Windows against the NBIS fixtures; an image whose bit allocation
+hits a rounding difference could still get a quantizer bin that differs in its last digit.
+
+## Performance
+
+Single-threaded, on one core of a cloud x86-64 machine:
+
+| image | encode | decode |
+|---|---|---|
+| 500 ppi rolled print, 800×750 | 17 ms | 17 ms |
+| 1000 ppi, 1600×1500 | 52 ms | 51 ms |
+| 1000 ppi palm, 5500×8000 | 1.5 s | 0.9 s |
 
 ## License
 
