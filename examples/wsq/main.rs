@@ -1,12 +1,23 @@
-//! Converts between binary PGM (P5) and WSQ files.
+//! Converts between binary PGM (P5) and WSQ files, and checks the decoder
+//! on a collection of real files.
 //!
 //! ```text
-//! cargo run --example wsq -- encode in.pgm out.wsq [bitrate] [ppi]
-//! cargo run --example wsq -- decode in.wsq out.pgm
-//! cargo run --example wsq -- info in.wsq
+//! cargo run --release --example wsq -- encode in.pgm out.wsq [bitrate] [ppi]
+//! cargo run --release --example wsq -- decode in.wsq out.pgm
+//! cargo run --release --example wsq -- info in.wsq
+//! cargo run --release --example wsq -- check DIR
+//! cargo run --release --example wsq -- extract FILE
 //! ```
+//!
+//! `check` decodes every WSQ stream under DIR, including streams inside
+//! other files such as ANSI/NIST-ITL transactions, and compares them with
+//! reference decodes stored next to them (see `corpus.rs`). `extract`
+//! writes the WSQ streams inside a file next to it.
+
+mod corpus;
 
 use std::error::Error;
+use std::path::Path;
 use std::{env, fs, process};
 
 /// Parses a binary PGM with a maximum value of 255.
@@ -68,10 +79,21 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             }
             println!("software {}", info.software);
             for comment in &info.comments {
-                println!("comment:\n{}", String::from_utf8_lossy(comment).trim_end_matches('\0'));
+                println!(
+                    "comment:\n{}",
+                    String::from_utf8_lossy(comment).trim_end_matches('\0')
+                );
             }
         }
-        _ => return Err("usage: wsq encode IN.pgm OUT.wsq [BITRATE] [PPI] | decode IN.wsq OUT.pgm | info IN.wsq".into()),
+        [cmd, dir] if cmd == "check" => corpus::check(Path::new(dir))?,
+        [cmd, file] if cmd == "extract" => corpus::extract(Path::new(file))?,
+        _ => {
+            return Err(
+                "usage: wsq encode IN.pgm OUT.wsq [BITRATE] [PPI] | decode IN.wsq OUT.pgm \
+                        | info IN.wsq | check DIR | extract FILE"
+                    .into(),
+            );
+        }
     }
     Ok(())
 }
