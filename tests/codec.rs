@@ -1,4 +1,6 @@
-use wsq_codec::{DecodeError, EncodeError, EncodeOptions, decode, encode, read_info};
+use wsq_codec::{
+    DecodeError, DecodeOptions, EncodeError, EncodeOptions, decode, decode_with, encode, read_info,
+};
 
 /// A fingerprint-like image: curved ridges with some noise.
 fn ridges(w: usize, h: usize) -> Vec<u8> {
@@ -26,10 +28,7 @@ fn psnr(a: &[u8], b: &[u8]) -> f64 {
 }
 
 fn round_trip(pixels: &[u8], w: usize, h: usize, bitrate: f32) -> (usize, f64) {
-    let options = EncodeOptions {
-        bitrate,
-        ..Default::default()
-    };
+    let options = EncodeOptions::default().with_bitrate(bitrate);
     let wsq = encode(pixels, w, h, &options).unwrap();
     let image = decode(&wsq).unwrap();
     assert_eq!((image.width, image.height), (w, h));
@@ -80,18 +79,41 @@ fn flat_and_smooth_images() {
 #[test]
 fn metadata() {
     let (w, h) = (128, 96);
-    let options = EncodeOptions {
-        bitrate: 1.5,
-        ppi: Some(1000),
-        comments: vec![b"first".to_vec(), vec![0xFF, 0xA1, 0xFF]],
-    };
+    let options = EncodeOptions::default()
+        .with_bitrate(1.5)
+        .with_ppi(Some(1000))
+        .with_comment(b"first".to_vec())
+        .with_comment(vec![0xFF, 0xA1, 0xFF])
+        .with_software(0x1234);
     let wsq = encode(&ridges(w, h), w, h, &options).unwrap();
     let info = read_info(&wsq).unwrap();
     assert_eq!((info.width, info.height, info.ppi), (w, h, Some(1000)));
+    assert_eq!(info.software, 0x1234);
     assert_eq!(info.comments.len(), 3);
     assert!(info.comments[0].starts_with(b"NIST_COM "));
     assert_eq!(info.comments[1..], options.comments[..]);
     assert_eq!(decode(&wsq).unwrap().ppi, Some(1000));
+}
+
+#[test]
+fn merges_a_caller_nistcom_comment() {
+    let (w, h) = (128, 96);
+    let options = EncodeOptions::default()
+        .with_ppi(Some(500))
+        .with_comment(b"plain".to_vec())
+        .with_comment(b"NIST_COM 3\nFING_CLASS W\nPPI 1000".to_vec())
+        .with_comment(b"NIST_COM 2\nSEX f".to_vec());
+    let info = read_info(&encode(&ridges(w, h), w, h, &options).unwrap()).unwrap();
+    // The first caller NISTCOM is merged; the second one is kept as given.
+    assert_eq!(info.comments.len(), 3);
+    let nist = String::from_utf8(info.comments[0].clone()).unwrap();
+    assert!(
+        nist.starts_with("NIST_COM 10\nFING_CLASS W\nPPI 500\nPIX_WIDTH 128\n"),
+        "{nist}"
+    );
+    assert_eq!(info.comments[1], b"plain");
+    assert_eq!(info.comments[2], b"NIST_COM 2\nSEX f");
+    assert_eq!(info.ppi, Some(500));
 }
 
 #[test]
@@ -114,19 +136,17 @@ fn encoder_rejects_bad_input() {
     );
     assert!(encode(&vec![0; 70000 * 81], 70000, 81, &opts).is_err());
     for bitrate in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-        let opts = EncodeOptions {
-            bitrate,
-            ..Default::default()
-        };
+        let opts = EncodeOptions::default().with_bitrate(bitrate);
         assert!(matches!(
             encode(&px, 100, 100, &opts),
             Err(EncodeError::InvalidBitrate(_))
         ));
     }
-    let opts = EncodeOptions {
-        comments: vec![vec![b'x'; 65534]],
-        ..Default::default()
-    };
+    assert_eq!(
+        encode(&px, 100, 100, &EncodeOptions::default().with_ppi(Some(0))),
+        Err(EncodeError::InvalidPpi)
+    );
+    let opts = EncodeOptions::default().with_comment(vec![b'x'; 65534]);
     assert_eq!(
         encode(&px, 100, 100, &opts),
         Err(EncodeError::CommentTooLong(65534))
@@ -147,12 +167,42 @@ fn sample() -> Vec<u8> {
         &ridges(w, h),
         w,
         h,
-        &EncodeOptions {
-            ppi: Some(500),
-            ..Default::default()
-        },
+        &EncodeOptions::default().with_ppi(Some(500)),
     )
     .unwrap()
+}
+
+/// `wsq` with the dimensions in its frame header replaced.
+fn with_dimensions(wsq: &[u8], width: u16, height: u16) -> Vec<u8> {
+    let sof = wsq.windows(2).position(|m| m == [0xFF, 0xA2]).unwrap();
+    let mut out = wsq.to_vec();
+    out[sof + 6..sof + 8].copy_from_slice(&height.to_be_bytes());
+    out[sof + 8..sof + 10].copy_from_slice(&width.to_be_bytes());
+    out
+}
+
+#[test]
+fn oversized_images_are_refused_before_decoding() {
+    let huge = with_dimensions(&sample(), 65535, 65535);
+    let too_large = DecodeError::TooLarge {
+        width: 65535,
+        height: 65535,
+        max_pixels: wsq_codec::DEFAULT_MAX_PIXELS,
+    };
+    assert_eq!(decode(&huge), Err(too_large));
+    // Reading the header alone needs no limit.
+    assert_eq!(read_info(&huge).unwrap().width, 65535);
+
+    let wsq = sample();
+    let strict = DecodeOptions::default().with_max_pixels(Some(90 * 85 - 1));
+    assert!(matches!(
+        decode_with(&wsq, &strict),
+        Err(DecodeError::TooLarge { .. })
+    ));
+    let exact = DecodeOptions::default().with_max_pixels(Some(90 * 85));
+    assert!(decode_with(&wsq, &exact).is_ok());
+    let unlimited = DecodeOptions::default().with_max_pixels(None);
+    assert_eq!(decode_with(&wsq, &unlimited), decode(&wsq));
 }
 
 #[test]

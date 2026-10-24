@@ -11,7 +11,10 @@ carry in Types 4 and 14.
 - Decodes the standard 9/7 filter bank and NBIS's alternative 8/8 one; encodes with the
   standard bank.
 - Reads the resolution and comments a stream carries, and writes the NISTCOM comment NBIS
-  writes.
+  writes, merged with a NISTCOM comment of the caller's as NBIS merges it.
+- Safe on untrusted input: corrupt streams fail with an error, never a panic, and the decoder
+  refuses images larger than a configurable limit (100 million pixels by default) before
+  allocating anything for them.
 
 ## Usage
 
@@ -23,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (width, height) = (416, 389);
     let pixels = vec![128u8; width * height];
 
-    let options = EncodeOptions { bitrate: 0.75, ppi: Some(500), ..Default::default() };
+    let options = EncodeOptions::default().with_bitrate(0.75).with_ppi(Some(500));
     let wsq: Vec<u8> = encode(&pixels, width, height, &options)?;
 
     let image = decode(&wsq)?;
@@ -33,6 +36,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `read_info` returns the dimensions, resolution and comments without decoding the image.
+`decode_with` takes `DecodeOptions`, whose `max_pixels` bounds the image size; decoding needs
+about 11 bytes per pixel at its peak.
 
 The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choice for 500 ppi
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.
@@ -43,6 +48,26 @@ An example converts between binary PGM and WSQ:
 cargo run --release --example wsq -- encode finger.pgm finger.wsq 0.75 500
 cargo run --release --example wsq -- decode finger.wsq finger.pgm
 cargo run --release --example wsq -- info finger.wsq
+```
+
+## Checking real files
+
+The same example checks the decoder on a collection of files, locally:
+
+```sh
+cargo run --release --example wsq -- check /path/to/corpus
+```
+
+It decodes every WSQ stream under the directory, including streams inside other files such as
+ANSI/NIST-ITL transactions (found by their start-of-image marker), and reports dimensions,
+resolution, encoder number and decoding time. When a reference decode sits next to a stream, it
+compares the pixels: `name.raw` or `name.pgm` for `name.wsq`, and `name.N.raw` or `name.N.pgm`
+for the `N`th stream inside another file `name.ext`. `.raw` files hold the bare pixels, as NBIS's
+`dwsq` writes them with raw output. To produce references for streams inside transactions,
+`extract` writes them out as `name.N.wsq`:
+
+```sh
+cargo run --release --example wsq -- extract case.eft   # case.1.wsq, case.2.wsq, ...
 ```
 
 ## Differences from NBIS

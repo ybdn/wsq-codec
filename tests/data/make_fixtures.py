@@ -48,24 +48,36 @@ def fnv1a(data):
     return h
 
 
+# Comments handed to the encoder, the same as in tests/nbis.rs.
+NISTCOM = b"NIST_COM 4\nSEX m\nPPI 1000\nFING_CLASS W"
+PLAIN = b"Scanned by the test suite"
+
 FIXTURES = [
-    # name, generator, width, height, bit rate, ppi, even filter bank
-    ("rings_320x288.wsq", "rings", 320, 288, 0.75, 500, False),
-    ("noise_257x255.wsq", "noise", 257, 255, 2.25, 1000, False),
-    ("checker_101x97.wsq", "checker", 101, 97, 0.75, -1, False),
-    ("rings_300x211_even.wsq", "rings", 300, 211, 0.75, 500, True),
+    # name, generator, width, height, bit rate, ppi, even filter bank, comment
+    ("rings_320x288.wsq", "rings", 320, 288, 0.75, 500, False, None),
+    ("noise_257x255.wsq", "noise", 257, 255, 2.25, 1000, False, None),
+    ("checker_101x97.wsq", "checker", 101, 97, 0.75, -1, False, None),
+    ("rings_300x211_even.wsq", "rings", 300, 211, 0.75, 500, True, None),
+    ("rings_200x180_nistcom.wsq", "rings", 200, 180, 0.75, 500, False, NISTCOM),
+    ("checker_150x140_comment.wsq", "checker", 150, 140, 2.25, -1, False, PLAIN),
 ]
 
 
 def main(nbis, nbis_even):
     with tempfile.TemporaryDirectory() as tmp:
         raw, out = os.path.join(tmp, "in.raw"), os.path.join(tmp, "out.raw")
-        for name, kind, w, h, rate, ppi, even in FIXTURES:
+        text = os.path.join(tmp, "comment.txt")
+        for name, kind, w, h, rate, ppi, even, comment in FIXTURES:
             tool = nbis_even if even else nbis
             with open(raw, "wb") as f:
                 f.write(pattern(kind, w, h, w * h))
             wsq = os.path.join(HERE, name)
-            subprocess.run([tool, "e", raw, str(w), str(h), str(rate), str(ppi), wsq], check=True)
+            args = [tool, "e", raw, str(w), str(h), str(rate), str(ppi), wsq]
+            if comment is not None:
+                with open(text, "wb") as f:
+                    f.write(comment)
+                args.append(text)
+            subprocess.run(args, check=True)
             subprocess.run([tool, "d", wsq, out], check=True, capture_output=True)
             with open(out, "rb") as f:
                 print(f"{name}: 0x{fnv1a(f.read()):016x}")

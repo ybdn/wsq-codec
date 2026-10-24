@@ -6,7 +6,7 @@ use crate::tables::{
     self, COM, DHT, DQT, DTT, EOI, FrameHeader, MAX_DHT_TABLES, SOB, SOF, SOI, TransformTable,
 };
 use crate::tree::Trees;
-use crate::{Image, Info, nistcom, wavelet};
+use crate::{DecodeOptions, Image, Info, nistcom, wavelet};
 
 /// Tables defined so far in a stream.
 #[derive(Default)]
@@ -126,10 +126,19 @@ fn read_block(
     }
 }
 
-pub(crate) fn decode(data: &[u8]) -> Result<Image, DecodeError> {
+pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
     let mut r = ByteReader::new(data);
     let header = read_header(&mut r)?;
     let info = header.info();
+    if let Some(max_pixels) = options.max_pixels {
+        if info.width * info.height > max_pixels {
+            return Err(DecodeError::TooLarge {
+                width: info.width,
+                height: info.height,
+                max_pixels,
+            });
+        }
+    }
     let Header {
         frame,
         mut tables,

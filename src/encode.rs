@@ -52,6 +52,9 @@ pub(crate) fn encode(
             actual: pixels.len(),
         });
     }
+    if options.ppi == Some(0) {
+        return Err(EncodeError::InvalidPpi);
+    }
     let bitrate = options.bitrate;
     if !(bitrate.is_finite() && bitrate > 0.0) {
         return Err(EncodeError::InvalidBitrate(bitrate));
@@ -83,12 +86,15 @@ pub(crate) fn encode(
 
     let mut out = Vec::new();
     out.extend_from_slice(&SOI.to_be_bytes());
-    tables::write_comment(
-        &mut out,
-        nistcom::build(width, height, options.ppi, bitrate).as_bytes(),
-    )?;
-    for comment in &options.comments {
-        tables::write_comment(&mut out, comment)?;
+    // The first NISTCOM comment the caller gives is merged into ours.
+    let merged = options.comments.iter().position(|c| nistcom::is_nistcom(c));
+    let base = merged.map(|i| options.comments[i].as_slice());
+    let nist = nistcom::build(width, height, options.ppi, bitrate, base);
+    tables::write_comment(&mut out, &nist)?;
+    for (i, comment) in options.comments.iter().enumerate() {
+        if Some(i) != merged {
+            tables::write_comment(&mut out, comment)?;
+        }
     }
     tables::write_transform_table(&mut out, &LOFILT, &HIFILT);
     tables::write_quant_table(&mut out, &params, bitrate)?;
@@ -97,7 +103,7 @@ pub(crate) fn encode(
         height: height as u16,
         m_shift,
         r_scale,
-        software: 0,
+        software: options.software,
     };
     tables::write_frame_header(&mut out, &frame);
 
