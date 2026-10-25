@@ -58,9 +58,9 @@ pub const DEFAULT_MAX_PIXELS: usize = 100_000_000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Image {
-    /// Width in pixels.
+    /// Width in pixels, at most 65535 as the format allows.
     pub width: usize,
-    /// Height in pixels.
+    /// Height in pixels, at most 65535 as the format allows.
     pub height: usize,
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.
@@ -73,9 +73,9 @@ pub struct Image {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Info {
-    /// Width in pixels.
+    /// Width in pixels, at most 65535 as the format allows.
     pub width: usize,
-    /// Height in pixels.
+    /// Height in pixels, at most 65535 as the format allows.
     pub height: usize,
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.

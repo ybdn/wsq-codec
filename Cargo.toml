@@ -6,9 +6,11 @@ rust-version = "1.85"
 description = "Decoder and encoder for WSQ (Wavelet Scalar Quantization) fingerprint images"
 license = "MIT"
 repository = "https://github.com/ybdn/wsq-codec"
+documentation = "https://docs.rs/wsq-codec"
 readme = "README.md"
 keywords = ["wsq", "fingerprint", "biometrics", "image", "codec"]
 categories = ["multimedia::images", "compression"]
+exclude = [".claude", ".github", "CLAUDE.md"]
 publish = false
 
 [dependencies]

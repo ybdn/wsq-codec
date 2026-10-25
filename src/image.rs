@@ -33,7 +33,8 @@ impl From<Image> for GrayImage {
     }
 }
 
-/// Encodes a grayscale image.
+/// Encodes a grayscale image, whose dimensions must be between 81 and
+/// 65535 as for [`encode`](crate::encode).
 pub fn encode_gray_image(
     image: &GrayImage,
     options: &EncodeOptions,
