@@ -29,6 +29,8 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
       - run: cargo test --all-targets
       - run: cargo test --doc
+      - run: cargo test --all-targets --features image
+      - run: cargo test --doc --features image
 
   lint:
     runs-on: ubuntu-latest
@@ -39,3 +41,7 @@ jobs:
           components: clippy, rustfmt
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features image -- -D warnings
+      - run: cargo doc --no-deps --features image
+        env:
+          RUSTDOCFLAGS: -D warnings

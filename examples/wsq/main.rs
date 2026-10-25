@@ -17,6 +17,8 @@
 mod corpus;
 
 use std::error::Error;
+use std::fs::File;
+use std::io::BufWriter;
 use std::path::Path;
 use std::{env, fs, process};
 
@@ -62,10 +64,12 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                 options.bitrate = bitrate.parse()?;
             }
             options.ppi = rest.get(1).map(|p| p.parse()).transpose()?;
-            fs::write(output, wsq_codec::encode(pixels, width, height, &options)?)?;
+            let file = BufWriter::new(File::create(output)?);
+            wsq_codec::encode_to(file, pixels, width, height, &options)?;
         }
         [cmd, input, output] if cmd == "decode" => {
-            let image = wsq_codec::decode(&fs::read(input)?)?;
+            let options = wsq_codec::DecodeOptions::default();
+            let image = wsq_codec::decode_from(File::open(input)?, &options)?;
             let mut pgm = format!("P5\n{} {}\n255\n", image.width, image.height).into_bytes();
             pgm.extend_from_slice(&image.pixels);
             fs::write(output, pgm)?;
