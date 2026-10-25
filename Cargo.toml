@@ -18,3 +18,7 @@ image = { version = "0.25.8", default-features = false, optional = true }
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[bench]]
+name = "codec"
+harness = false
