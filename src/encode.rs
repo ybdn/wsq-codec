@@ -117,23 +117,48 @@ pub(crate) fn encode(
     tables::write_frame_header(&mut out, &frame);
 
     // The first block has its own Huffman table; the other two share one.
-    let mut counts = [0; 256];
-    huffman::count_symbols(block1, &mut counts);
-    let spec = HuffmanSpec::from_counts(&counts);
-    tables::write_huffman_table(&mut out, 0, &spec);
-    tables::write_block_header(&mut out, 0);
-    EncodeTable::new(&spec).compress(block1, &mut out);
+    // Counting the symbols and coding the blocks are independent per block,
+    // so they can go to separate threads: each block ends on a byte
+    // boundary, and the streams join up unchanged.
+    let parallel = par::parts(threads, coeffs.len()) > 1;
+    let count = |block: &[i16]| {
+        let mut counts = [0; 256];
+        huffman::count_symbols(block, &mut counts);
+        counts
+    };
+    let (counts1, counts2, counts3) = par::run3(
+        parallel,
+        || count(block1),
+        || count(block2),
+        || count(block3),
+    );
+    let spec1 = HuffmanSpec::from_counts(&counts1);
+    let mut counts = counts2;
+    for (n, m) in counts.iter_mut().zip(counts3) {
+        *n += m;
+    }
+    let spec2 = HuffmanSpec::from_counts(&counts);
+    let (table1, table2) = (EncodeTable::new(&spec1), EncodeTable::new(&spec2));
+    let compress = |table: &EncodeTable, block: &[i16]| {
+        let mut data = Vec::new();
+        table.compress(block, &mut data);
+        data
+    };
+    let (data1, data2, data3) = par::run3(
+        parallel,
+        || compress(&table1, block1),
+        || compress(&table2, block2),
+        || compress(&table2, block3),
+    );
 
-    let mut counts = [0; 256];
-    huffman::count_symbols(block2, &mut counts);
-    huffman::count_symbols(block3, &mut counts);
-    let spec = HuffmanSpec::from_counts(&counts);
-    let table = EncodeTable::new(&spec);
-    tables::write_huffman_table(&mut out, 1, &spec);
+    tables::write_huffman_table(&mut out, 0, &spec1);
+    tables::write_block_header(&mut out, 0);
+    out.extend_from_slice(&data1);
+    tables::write_huffman_table(&mut out, 1, &spec2);
     tables::write_block_header(&mut out, 1);
-    table.compress(block2, &mut out);
+    out.extend_from_slice(&data2);
     tables::write_block_header(&mut out, 1);
-    table.compress(block3, &mut out);
+    out.extend_from_slice(&data3);
 
     out.extend_from_slice(&EOI.to_be_bytes());
     Ok(out)

@@ -29,3 +29,26 @@ pub(crate) fn zip_chunks<A: Sync, B: Send>(
         }
     });
 }
+
+/// Runs three independent jobs, on three threads when `parallel` is set,
+/// and returns their results in order.
+pub(crate) fn run3<T: Send>(
+    parallel: bool,
+    a: impl FnOnce() -> T + Send,
+    b: impl FnOnce() -> T + Send,
+    c: impl FnOnce() -> T + Send,
+) -> (T, T, T) {
+    if !parallel {
+        return (a(), b(), c());
+    }
+    std::thread::scope(|scope| {
+        let a = scope.spawn(a);
+        let b = scope.spawn(b);
+        let c = c();
+        (
+            a.join().expect("entropy coding does not panic"),
+            b.join().expect("entropy coding does not panic"),
+            c,
+        )
+    })
+}
