@@ -187,7 +187,14 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
     }
     let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q);
     drop(coeffs);
-    wavelet::reconstruct(&mut data, width, &trees.w, &transform.lo, &transform.hi);
+    wavelet::reconstruct(
+        &mut data,
+        width,
+        &trees.w,
+        &transform.lo,
+        &transform.hi,
+        crate::thread_count(options.threads),
+    );
 
     let pixels = data
         .iter()

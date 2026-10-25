@@ -62,7 +62,12 @@ pub(crate) fn encode(
 
     let (mut data, m_shift, r_scale) = normalize(pixels);
     let trees = Trees::new(width, height);
-    wavelet::decompose(&mut data, width, &trees.w);
+    wavelet::decompose(
+        &mut data,
+        width,
+        &trees.w,
+        crate::thread_count(options.threads),
+    );
 
     let var = quant::variances(&data, width, &trees.q);
     let mut params = quant::bin_widths(&var, bitrate);

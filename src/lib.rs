@@ -98,12 +98,17 @@ pub struct DecodeOptions {
     /// frame header alone decides the size, so a small crafted stream can
     /// otherwise claim an image of several gigapixels.
     pub max_pixels: Option<usize>,
+    /// Number of threads the wavelet transform runs on: 1, the default,
+    /// keeps all the work on the calling thread, and 0 uses one thread per
+    /// core. The output does not depend on it.
+    pub threads: usize,
 }
 
 impl Default for DecodeOptions {
     fn default() -> Self {
         DecodeOptions {
             max_pixels: Some(DEFAULT_MAX_PIXELS),
+            threads: 1,
         }
     }
 }
@@ -112,6 +117,12 @@ impl DecodeOptions {
     /// Sets [`max_pixels`](Self::max_pixels).
     pub fn with_max_pixels(mut self, max_pixels: Option<usize>) -> Self {
         self.max_pixels = max_pixels;
+        self
+    }
+
+    /// Sets [`threads`](Self::threads).
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
         self
     }
 }
@@ -145,6 +156,10 @@ pub struct EncodeOptions {
     /// Implementation number the FBI assigned to the encoder, written in
     /// the frame header. 0, the default, means unassigned.
     pub software: u16,
+    /// Number of threads the wavelet transform runs on: 1, the default,
+    /// keeps all the work on the calling thread, and 0 uses one thread per
+    /// core. The output does not depend on it.
+    pub threads: usize,
 }
 
 impl Default for EncodeOptions {
@@ -154,6 +169,7 @@ impl Default for EncodeOptions {
             ppi: None,
             comments: Vec::new(),
             software: 0,
+            threads: 1,
         }
     }
 }
@@ -181,6 +197,20 @@ impl EncodeOptions {
     pub fn with_software(mut self, software: u16) -> Self {
         self.software = software;
         self
+    }
+
+    /// Sets [`threads`](Self::threads).
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
+    }
+}
+
+/// Resolves a `threads` option: 0 means one thread per core.
+fn thread_count(threads: usize) -> usize {
+    match threads {
+        0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+        n => n,
     }
 }
 
