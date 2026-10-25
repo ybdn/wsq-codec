@@ -47,7 +47,7 @@ The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choic
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.
 
 With the `image` feature (off by default, the only dependency the crate can pull), decoded
-images convert into `image::GrayImage`, `wsq_codec::image::encode_gray_image` encodes one, and
+images convert into `image::GrayImage` (`TryFrom`), `wsq_codec::image::encode_gray_image` encodes one, and
 `wsq_codec::image::register_hooks()` lets the `image` crate open `.wsq` files itself:
 
 ```rust,ignore
