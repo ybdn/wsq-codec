@@ -50,6 +50,15 @@ cargo run --release --example wsq -- decode finger.wsq finger.pgm
 cargo run --release --example wsq -- info finger.wsq
 ```
 
+## ANSI/NIST-ITL transactions
+
+This crate handles the WSQ stream only. Parsing the Type-4 and Type-14 records of ANSI/NIST-ITL
+transactions (EBTS and national profiles) belongs in a separate crate, which would hand the
+bytes of the image field to `decode` or `read_info`. In a transaction the authoritative
+resolution is the one the record gives (fields 14.009 and 14.010 in Type-14; for Type-4, its
+ISR byte with the resolution fields of the Type-1 record), not `Image::ppi`, which only repeats what the NISTCOM comment in the stream says, when
+it says anything. Since transactions come from other parties, keep the decoder's pixel limit.
+
 ## Checking real files
 
 The same example checks the decoder on a collection of files, locally:
@@ -90,13 +99,19 @@ hits a rounding difference could still get a quantizer bin that differs in its l
 
 ## Performance
 
-Single-threaded, on one core of a cloud x86-64 machine:
+The fastest of 5 runs on generated images, in memory, on a 4-core cloud x86-64 machine
+(`cargo run --release --example bench -- THREADS`):
 
-| image | encode | decode |
-|---|---|---|
-| 500 ppi rolled print, 800×750 | 17 ms | 17 ms |
-| 1000 ppi, 1600×1500 | 52 ms | 51 ms |
-| 1000 ppi palm, 5500×8000 | 1.5 s | 0.9 s |
+| image | encode, 1 thread | decode, 1 thread | encode, 4 threads | decode, 4 threads |
+|---|---|---|---|---|
+| 500 ppi rolled print, 800×750 | 12 ms | 11 ms | 12 ms | 12 ms |
+| 1000 ppi, 1600×1500 | 50 ms | 45 ms | 45 ms | 39 ms |
+| 1000 ppi palm, 5500×8000 | 1.17 s | 1.07 s | 0.70 s | 0.69 s |
+
+The work stays on the calling thread unless `EncodeOptions::threads` or
+`DecodeOptions::threads` asks for more (0 means one per core). Only the wavelet transform is
+split, by rows and by columns, which leaves the result unchanged; it pays off on large images
+only.
 
 ## License
 
