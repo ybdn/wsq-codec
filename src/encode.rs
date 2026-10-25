@@ -4,18 +4,24 @@ use crate::quant;
 use crate::tables::{self, EOI, FrameHeader, SOI};
 use crate::tree::{NUM_SUBBANDS, START_SUBBAND_2, START_SUBBAND_3, Trees};
 use crate::wavelet::{self, HIFILT, LOFILT};
-use crate::{EncodeOptions, nistcom};
+use crate::{EncodeOptions, nistcom, par};
 
 /// Smallest width and height the encoder accepts. Below it some subbands
 /// are too small for the variance estimate that drives quantization.
 pub(crate) const MIN_DIMENSION: usize = 81;
 
 /// Converts pixels to floats centered on zero and scaled to about
-/// +/-128. Returns the shift and scale that undo it.
-fn normalize(pixels: &[u8]) -> (Vec<f32>, f32, f32) {
-    let sum: u64 = pixels.iter().map(|&p| u64::from(p)).sum();
-    let low = pixels.iter().copied().min().unwrap_or(0);
-    let high = pixels.iter().copied().max().unwrap_or(0);
+/// +/-128, on up to `threads` threads. Returns the shift and scale that
+/// undo it.
+fn normalize(pixels: &[u8], threads: usize) -> (Vec<f32>, f32, f32) {
+    // A histogram gives the sum, the minimum and the maximum in one pass.
+    let mut counts = [0u64; 256];
+    for &p in pixels {
+        counts[usize::from(p)] += 1;
+    }
+    let sum: u64 = (0..256).map(|v| v as u64 * counts[v]).sum();
+    let low = counts.iter().position(|&c| c > 0).unwrap_or(0) as u8;
+    let high = counts.iter().rposition(|&c| c > 0).unwrap_or(0) as u8;
     let m_shift = sum as f32 / pixels.len() as f32;
     let low_diff = m_shift - f32::from(low);
     let high_diff = f32::from(high) - m_shift;
@@ -29,10 +35,12 @@ fn normalize(pixels: &[u8]) -> (Vec<f32>, f32, f32) {
         // A flat image: every coefficient is zero whatever the scale.
         r_scale = 1.0;
     }
-    let data = pixels
-        .iter()
-        .map(|&p| (f32::from(p) - m_shift) / r_scale)
-        .collect();
+    let mut data = vec![0.0f32; pixels.len()];
+    par::zip_chunks(pixels, &mut data, threads, |pixels, data| {
+        for (d, &p) in data.iter_mut().zip(pixels) {
+            *d = (f32::from(p) - m_shift) / r_scale;
+        }
+    });
     (data, m_shift, r_scale)
 }
 
@@ -60,14 +68,15 @@ pub(crate) fn encode(
         return Err(EncodeError::InvalidBitrate(bitrate));
     }
 
-    let (mut data, m_shift, r_scale) = normalize(pixels);
+    let threads = crate::thread_count(options.threads);
+    let (mut data, m_shift, r_scale) = normalize(pixels, threads);
     let trees = Trees::new(width, height);
-    wavelet::decompose(&mut data, width, &trees.w);
+    wavelet::decompose(&mut data, width, &trees.w, threads);
 
     let var = quant::variances(&data, width, &trees.q);
     let mut params = quant::bin_widths(&var, bitrate);
     quant::limit_bin_widths(&mut params, &var, &data, width, &trees.q);
-    let coeffs = quant::quantize(&data, width, &trees.q, &params);
+    let coeffs = quant::quantize(&data, width, &trees.q, &params, threads);
     drop(data);
 
     // The coefficients of each block, in subband order.

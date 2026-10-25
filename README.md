@@ -4,7 +4,7 @@ Rust decoder and encoder for **WSQ** (Wavelet Scalar Quantization) fingerprint i
 compression the FBI specifies (IAFIS-IC-0110, version 3.1) and that ANSI/NIST-ITL transactions
 carry in Types 4 and 14.
 
-- Pure Rust, no dependencies, no `unsafe`.
+- Pure Rust, no dependencies (an optional `image` integration aside), no `unsafe`.
 - Matches NIST's reference implementation (NBIS): decoding gives the same pixels, and encoding
   gives the same bytes for the same image and bit rate, except where NBIS fails (see below).
   The tests check both against fixtures that NBIS produced.
@@ -35,12 +35,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+`decode_from` and `encode_to` read from an `io::Read` and write to an `io::Write`. Decoding
+needs the whole stream before it can produce a pixel, so `decode_from` reads to the end: wrap
+the reader in `Read::take` when the stream sits inside a larger file.
+
 `read_info` returns the dimensions, resolution and comments without decoding the image.
 `decode_with` takes `DecodeOptions`, whose `max_pixels` bounds the image size; decoding needs
 about 11 bytes per pixel at its peak.
 
 The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choice for 500 ppi
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.
+
+With the `image` feature (off by default, the only dependency the crate can pull), decoded
+images convert into `image::GrayImage`, `wsq_codec::image::encode_gray_image` encodes one, and
+`wsq_codec::image::register_hooks()` lets the `image` crate open `.wsq` files itself:
+
+```rust,ignore
+wsq_codec::image::register_hooks();
+let gray = image::open("finger.wsq")?.to_luma8();
+```
 
 An example converts between binary PGM and WSQ:
 
@@ -49,6 +62,16 @@ cargo run --release --example wsq -- encode finger.pgm finger.wsq 0.75 500
 cargo run --release --example wsq -- decode finger.wsq finger.pgm
 cargo run --release --example wsq -- info finger.wsq
 ```
+
+## ANSI/NIST-ITL transactions
+
+This crate handles the WSQ stream only. Parsing the Type-4 and Type-14 records of ANSI/NIST-ITL
+transactions (EBTS and national profiles) belongs in a separate crate, which would hand the
+bytes of the image field to `decode` or `read_info`. In a transaction the authoritative
+resolution is the one the record gives (fields 14.009 and 14.010 in Type-14; for Type-4, its
+ISR byte with the resolution fields of the Type-1 record), not `Image::ppi`, which only repeats
+what the NISTCOM comment in the stream says, when it says anything. Since transactions come
+from other parties, keep the decoder's pixel limit.
 
 ## Checking real files
 
@@ -68,6 +91,13 @@ for the `N`th stream inside another file `name.ext`. `.raw` files hold the bare 
 
 ```sh
 cargo run --release --example wsq -- extract case.eft   # case.1.wsq, case.2.wsq, ...
+```
+
+`tests/corpus.rs` runs the same check under `cargo test` when `WSQ_CORPUS_DIR` names a corpus,
+and does nothing otherwise, so the corpus never has to leave the machine that holds it:
+
+```sh
+WSQ_CORPUS_DIR=/path/to/corpus cargo test --release --test corpus -- --nocapture
 ```
 
 ## Differences from NBIS
@@ -90,14 +120,22 @@ hits a rounding difference could still get a quantizer bin that differs in its l
 
 ## Performance
 
-Single-threaded, on one core of a cloud x86-64 machine:
+The fastest of 5 runs on generated images, in memory, on a 4-core cloud x86-64 machine
+(`cargo run --release --example bench -- THREADS`):
 
-| image | encode | decode |
-|---|---|---|
-| 500 ppi rolled print, 800×750 | 17 ms | 17 ms |
-| 1000 ppi, 1600×1500 | 52 ms | 51 ms |
-| 1000 ppi palm, 5500×8000 | 1.5 s | 0.9 s |
+| image | encode, 1 thread | decode, 1 thread | encode, 4 threads | decode, 4 threads |
+|---|---|---|---|---|
+| 500 ppi rolled print, 800×750 | 11 ms | 11 ms | 13 ms | 11 ms |
+| 1000 ppi, 1600×1500 | 49 ms | 45 ms | 30 ms | 34 ms |
+| 1000 ppi palm, 5500×8000 | 1.07 s | 1.08 s | 0.55 s | 0.62 s |
+
+The work stays on the calling thread unless `EncodeOptions::threads` or
+`DecodeOptions::threads` asks for more (0 means one per core). The wavelet transform is split
+by rows and by columns, quantization by subbands, and the conversions between pixels and
+floats by chunks; each value goes through the same arithmetic either way, so the result is
+unchanged. Huffman coding stays on one thread. Threads pay off on large images only.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The test fixtures in `tests/data` were written by NIST's NBIS,
+which is in the public domain; see [tests/data/README.md](tests/data/README.md).

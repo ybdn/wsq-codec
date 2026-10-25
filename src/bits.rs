@@ -53,8 +53,9 @@ impl<'a> ByteReader<'a> {
     pub fn bits(&mut self) -> BitReader<'_, 'a> {
         BitReader {
             bytes: self,
-            cur: 0,
+            acc: 0,
             avail: 0,
+            end: None,
         }
     }
 }
@@ -66,52 +67,112 @@ pub(crate) enum Bit {
     Marker(u16),
 }
 
+/// Why the reader stopped taking bytes in.
+#[derive(Clone, Copy)]
+enum End {
+    /// A marker, already consumed from the byte reader.
+    Marker(u16),
+    /// The end of the stream.
+    Eof,
+}
+
 /// Reader of entropy-coded data. It advances the underlying byte reader,
 /// which ends up just past the marker that ends the data.
+///
+/// Bytes are taken in ahead of use, up to the marker that ends the data,
+/// so that codes can be looked up several bits at a time. The bits come
+/// out exactly as one byte at a time would give them.
 pub(crate) struct BitReader<'r, 'a> {
     bytes: &'r mut ByteReader<'a>,
-    cur: u8,
-    avail: u8,
+    /// Bits not yet read, aligned to the most significant end.
+    acc: u64,
+    avail: u32,
+    end: Option<End>,
 }
 
 impl BitReader<'_, '_> {
+    /// Takes in whole bytes while they fit and the data goes on.
+    fn fill(&mut self) {
+        while self.avail <= 56 && self.end.is_none() {
+            let Ok(b) = self.bytes.u8() else {
+                self.end = Some(End::Eof);
+                break;
+            };
+            if b == 0xFF {
+                match self.bytes.u8() {
+                    Ok(0x00) => {}
+                    Ok(m) => {
+                        self.end = Some(End::Marker(0xFF00 | u16::from(m)));
+                        break;
+                    }
+                    Err(_) => {
+                        self.end = Some(End::Eof);
+                        break;
+                    }
+                }
+            }
+            self.acc |= u64::from(b) << (56 - self.avail);
+            self.avail += 8;
+        }
+    }
+
+    /// Returns the next `n` bits (1 to 16) without reading them, if the
+    /// data holds that many before its end.
+    pub fn peek(&mut self, n: u32) -> Option<u16> {
+        if self.avail < n {
+            self.fill();
+            if self.avail < n {
+                return None;
+            }
+        }
+        Some((self.acc >> (64 - n)) as u16)
+    }
+
+    /// Skips `n` bits, which [`peek`](Self::peek) has returned.
+    pub fn consume(&mut self, n: u32) {
+        debug_assert!(n <= self.avail);
+        self.acc <<= n;
+        self.avail -= n;
+    }
+
     /// Reads one bit. A marker can only end the data on a byte boundary,
     /// and only where a new code starts or continues.
     pub fn bit(&mut self) -> Result<Bit, DecodeError> {
-        if self.avail == 0 {
-            let b = self.bytes.u8()?;
-            if b == 0xFF {
-                match self.bytes.u8()? {
-                    0x00 => {}
-                    m => return Ok(Bit::Marker(0xFF00 | u16::from(m))),
-                }
+        match self.peek(1) {
+            Some(b) => {
+                self.consume(1);
+                Ok(Bit::Bit(b))
             }
-            self.cur = b;
-            self.avail = 8;
+            None => match self.end {
+                Some(End::Marker(m)) => Ok(Bit::Marker(m)),
+                _ => Err(DecodeError::UnexpectedEof),
+            },
         }
-        self.avail -= 1;
-        Ok(Bit::Bit(u16::from((self.cur >> self.avail) & 1)))
     }
 
     /// Reads `n` bits (at most 16) of raw data, which a marker may not
     /// interrupt.
     pub fn bits(&mut self, n: u8) -> Result<u16, DecodeError> {
-        let mut v = 0u16;
-        for _ in 0..n {
-            match self.bit()? {
-                Bit::Bit(b) => v = (v << 1) | b,
-                Bit::Marker(_) => return Err(DecodeError::CorruptData("marker inside a value")),
-            }
+        if n == 0 {
+            return Ok(0);
         }
-        Ok(v)
+        if let Some(v) = self.peek(u32::from(n)) {
+            self.consume(u32::from(n));
+            return Ok(v);
+        }
+        match self.end {
+            Some(End::Marker(_)) => Err(DecodeError::CorruptData("marker inside a value")),
+            _ => Err(DecodeError::UnexpectedEof),
+        }
     }
 }
 
 /// Big-endian writer of entropy-coded data with byte stuffing.
 pub(crate) struct BitWriter<'a> {
     out: &'a mut Vec<u8>,
-    acc: u8,
-    nbits: u8,
+    /// Bits not yet written, in the low `nbits` bits.
+    acc: u64,
+    nbits: u32,
 }
 
 impl<'a> BitWriter<'a> {
@@ -123,13 +184,19 @@ impl<'a> BitWriter<'a> {
         }
     }
 
-    /// Writes the low `size` bits of `code`, most significant first.
+    /// Writes the low `size` bits of `code` (at most 16), most significant
+    /// first.
     pub fn put(&mut self, code: u16, size: u8) {
-        for i in (0..size).rev() {
-            self.acc = (self.acc << 1) | ((code >> i) & 1) as u8;
-            self.nbits += 1;
-            if self.nbits == 8 {
-                self.emit();
+        let size = u32::from(size);
+        let bits = u64::from(code) & ((1 << size) - 1);
+        self.acc = (self.acc << size) | bits;
+        self.nbits += size;
+        while self.nbits >= 8 {
+            self.nbits -= 8;
+            let byte = (self.acc >> self.nbits) as u8;
+            self.out.push(byte);
+            if byte == 0xFF {
+                self.out.push(0);
             }
         }
     }
@@ -137,21 +204,9 @@ impl<'a> BitWriter<'a> {
     /// Pads the last byte with one bits.
     pub fn flush(mut self) {
         if self.nbits > 0 {
-            while self.nbits < 8 {
-                self.acc = (self.acc << 1) | 1;
-                self.nbits += 1;
-            }
-            self.emit();
+            let pad = 8 - self.nbits as u8;
+            self.put((1 << pad) - 1, pad);
         }
-    }
-
-    fn emit(&mut self) {
-        self.out.push(self.acc);
-        if self.acc == 0xFF {
-            self.out.push(0);
-        }
-        self.acc = 0;
-        self.nbits = 0;
     }
 }
 

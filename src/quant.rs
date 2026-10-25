@@ -4,6 +4,7 @@
 //! NIST reference implementation, so quantization decisions, and thus the
 //! encoded bytes, come out the same.
 
+use crate::par;
 use crate::tree::{NUM_SUBBANDS, Q_TREE_LEN, QNode, START_SUBBAND_3};
 
 /// Subbands whose variance is below this carry no information and are
@@ -187,35 +188,80 @@ pub(crate) fn limit_bin_widths(
     }
 }
 
+/// Appends the quantized coefficients of subband `cnt` to `out`, in
+/// row-major order.
+fn quantize_subband(
+    data: &[f32],
+    width: usize,
+    node: &QNode,
+    params: &QuantParams,
+    cnt: usize,
+    out: &mut Vec<i16>,
+) {
+    let qbin = params.qbss[cnt];
+    let zbin = (f64::from(params.qzbs[cnt]) / 2.0) as f32;
+    for row in node.y..node.y + node.leny {
+        for &v in &data[row * width + node.x..row * width + node.x + node.lenx] {
+            let q = if -zbin <= v && v <= zbin {
+                0.0
+            } else if v > 0.0 {
+                f64::from((v - zbin) / qbin) + 1.0
+            } else {
+                f64::from((v + zbin) / qbin) - 1.0
+            };
+            out.push(q as i16);
+        }
+    }
+}
+
 /// Quantizes the transformed image, subband by subband in row-major
-/// order, skipping dropped subbands.
+/// order, skipping dropped subbands. Runs of consecutive subbands go to
+/// up to `threads` threads.
 pub(crate) fn quantize(
     data: &[f32],
     width: usize,
     q_tree: &[QNode; Q_TREE_LEN],
     params: &QuantParams,
+    threads: usize,
 ) -> Vec<i16> {
-    let mut out = Vec::with_capacity(data.len());
-    for (cnt, node) in q_tree.iter().enumerate().take(NUM_SUBBANDS) {
-        let qbin = params.qbss[cnt];
-        if qbin == 0.0 {
-            continue;
+    let kept: Vec<usize> = (0..NUM_SUBBANDS)
+        .filter(|&c| params.qbss[c] != 0.0)
+        .collect();
+    let total: usize = kept.iter().map(|&c| q_tree[c].area()).sum();
+    let run = |subbands: &[usize]| {
+        let len = subbands.iter().map(|&c| q_tree[c].area()).sum();
+        let mut out = Vec::with_capacity(len);
+        for &c in subbands {
+            quantize_subband(data, width, &q_tree[c], params, c, &mut out);
         }
-        let zbin = (f64::from(params.qzbs[cnt]) / 2.0) as f32;
-        for row in node.y..node.y + node.leny {
-            for &v in &data[row * width + node.x..row * width + node.x + node.lenx] {
-                let q = if -zbin <= v && v <= zbin {
-                    0.0
-                } else if v > 0.0 {
-                    f64::from((v - zbin) / qbin) + 1.0
-                } else {
-                    f64::from((v + zbin) / qbin) - 1.0
-                };
-                out.push(q as i16);
-            }
+        out
+    };
+    let parts = par::parts(threads, total);
+    if parts == 1 {
+        return run(&kept);
+    }
+    // Cut the subbands into runs of about equal area.
+    let mut runs = Vec::new();
+    let (mut start, mut area) = (0, 0);
+    for (i, &c) in kept.iter().enumerate() {
+        area += q_tree[c].area();
+        if area * parts >= total * (runs.len() + 1) && runs.len() + 1 < parts {
+            runs.push(&kept[start..=i]);
+            start = i + 1;
         }
     }
-    out
+    runs.push(&kept[start..]);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = runs
+            .iter()
+            .map(|subbands| scope.spawn(|| run(subbands)))
+            .collect();
+        let mut out = Vec::with_capacity(total);
+        for handle in handles {
+            out.extend(handle.join().expect("quantization does not panic"));
+        }
+        out
+    })
 }
 
 /// Quantization table as read from a file.
@@ -246,7 +292,7 @@ pub(crate) fn unquantize(
     q_tree: &[QNode; Q_TREE_LEN],
 ) -> Vec<f32> {
     let mut data = vec![0.0f32; width * height];
-    let mut coeffs = coeffs.iter().copied();
+    let mut coeffs = coeffs;
     let c = table.bin_center;
     for (cnt, node) in q_tree.iter().enumerate().take(NUM_SUBBANDS) {
         let qbin = table.q_bin[cnt];
@@ -255,8 +301,10 @@ pub(crate) fn unquantize(
         }
         let half_z = f64::from(table.z_bin[cnt]) / 2.0;
         for row in node.y..node.y + node.leny {
-            for out in &mut data[row * width + node.x..row * width + node.x + node.lenx] {
-                let s = coeffs.next().unwrap_or(0);
+            let (line, rest) = coeffs.split_at(node.lenx.min(coeffs.len()));
+            coeffs = rest;
+            let out = &mut data[row * width + node.x..row * width + node.x + node.lenx];
+            for (out, &s) in out.iter_mut().zip(line) {
                 *out = match s.signum() {
                     0 => 0.0,
                     1 => (f64::from(qbin * (f32::from(s) - c)) + half_z) as f32,
