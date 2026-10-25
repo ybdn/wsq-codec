@@ -31,6 +31,7 @@
 //! # }
 //! ```
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -39,13 +40,15 @@ mod decode;
 mod encode;
 mod error;
 mod huffman;
+#[cfg(feature = "image")]
+pub mod image;
 mod nistcom;
 mod quant;
 mod tables;
 mod tree;
 mod wavelet;
 
-pub use error::{DecodeError, EncodeError};
+pub use error::{DecodeError, EncodeError, ReadError, WriteError};
 
 /// Default for [`DecodeOptions::max_pixels`]: 100 million pixels, which
 /// covers a 1000 ppi palm print (about 44 million) with room to spare.
@@ -225,6 +228,24 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, Decode
     decode::decode(data, options)
 }
 
+/// Reads a whole WSQ stream from `reader` and decodes it.
+///
+/// The wavelet transform needs every coefficient before it can produce a
+/// single pixel, so this reads `reader` to its end first: give it a reader
+/// that ends with the stream, for instance through [`Read::take`] when the
+/// stream sits inside a larger file, which also bounds the memory a
+/// stream from an untrusted source can claim.
+///
+/// [`Read::take`]: std::io::Read::take
+pub fn decode_from<R: std::io::Read>(
+    mut reader: R,
+    options: &DecodeOptions,
+) -> Result<Image, ReadError> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    Ok(decode_with(&data, options)?)
+}
+
 /// Reads the dimensions, resolution and comments of a WSQ stream without
 /// decoding its image.
 pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
@@ -243,4 +264,17 @@ pub fn encode(
     options: &EncodeOptions,
 ) -> Result<Vec<u8>, EncodeError> {
     encode::encode(pixels, width, height, options)
+}
+
+/// Encodes an image as [`encode`] does and writes the stream to `writer`.
+pub fn encode_to<W: std::io::Write>(
+    mut writer: W,
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    options: &EncodeOptions,
+) -> Result<(), WriteError> {
+    writer.write_all(&encode(pixels, width, height, options)?)?;
+    writer.flush()?;
+    Ok(())
 }
