@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+No code change. The repository history was rewritten after 0.1.0, so this release records the
+new commit in the package metadata.
+
 ## 0.1.0
 
 First release.
