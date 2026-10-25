@@ -43,6 +43,7 @@ mod huffman;
 #[cfg(feature = "image")]
 pub mod image;
 mod nistcom;
+mod par;
 mod quant;
 mod tables;
 mod tree;
@@ -101,9 +102,9 @@ pub struct DecodeOptions {
     /// frame header alone decides the size, so a small crafted stream can
     /// otherwise claim an image of several gigapixels.
     pub max_pixels: Option<usize>,
-    /// Number of threads the wavelet transform runs on: 1, the default,
-    /// keeps all the work on the calling thread, and 0 uses one thread per
-    /// core. The output does not depend on it.
+    /// Number of threads to split the work over: 1, the default, keeps it
+    /// all on the calling thread, and 0 uses one thread per core. The
+    /// output does not depend on it.
     pub threads: usize,
 }
 
@@ -159,9 +160,9 @@ pub struct EncodeOptions {
     /// Implementation number the FBI assigned to the encoder, written in
     /// the frame header. 0, the default, means unassigned.
     pub software: u16,
-    /// Number of threads the wavelet transform runs on: 1, the default,
-    /// keeps all the work on the calling thread, and 0 uses one thread per
-    /// core. The output does not depend on it.
+    /// Number of threads to split the work over: 1, the default, keeps it
+    /// all on the calling thread, and 0 uses one thread per core. The
+    /// output does not depend on it.
     pub threads: usize,
 }
 
