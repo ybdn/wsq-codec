@@ -145,72 +145,53 @@ impl Plan {
         });
     }
 
-    /// Filters `rows` rows. Row `r` of the input starts in `src` at
-    /// `src_row(r)`, and row `r` of the output in `dst` at `dst_row(r)`.
+    /// Filters rows: `src[r]` is input row `r` and `dst[r]` output row
+    /// `r`, both [`len`](Self::len) samples long.
     ///
     /// Rows go through [`apply_columns`](Self::apply_columns) in blocks,
     /// transposed, which filters them side by side.
-    fn apply_rows(
-        &self,
-        src: &[f32],
-        src_row: impl Fn(usize) -> usize,
-        dst: &mut [f32],
-        dst_row: impl Fn(usize) -> usize,
-        rows: usize,
-    ) {
+    fn apply_rows(&self, src: &[&[f32]], dst: &mut [&mut [f32]]) {
         const BLOCK: usize = 64;
         let n = self.len;
         let mut tin = vec![0.0f32; n * BLOCK];
         let mut tout = vec![0.0f32; n * BLOCK];
-        let mut starts = [0usize; BLOCK];
-        for first in (0..rows).step_by(BLOCK) {
-            let count = BLOCK.min(rows - first);
+        for (src, dst) in src.chunks(BLOCK).zip(dst.chunks_mut(BLOCK)) {
+            let count = src.len();
             // Transposing a sample of every row at a time keeps the rows
             // being read in cache.
-            for (b, start) in starts[..count].iter_mut().enumerate() {
-                *start = src_row(first + b);
-            }
             for (k, line) in tin.chunks_exact_mut(BLOCK).enumerate() {
-                for (v, &start) in line.iter_mut().zip(&starts[..count]) {
-                    *v = src[start + k];
+                for (v, row) in line.iter_mut().zip(src) {
+                    *v = row[k];
                 }
             }
-            self.apply_columns(&tin, |k| k * BLOCK, &mut tout, |k| k * BLOCK, count);
-            for (b, start) in starts[..count].iter_mut().enumerate() {
-                *start = dst_row(first + b);
-            }
+            let tin_rows: Vec<&[f32]> = tin.chunks_exact(BLOCK).map(|c| &c[..count]).collect();
+            let mut tout_rows: Vec<&mut [f32]> = tout
+                .chunks_exact_mut(BLOCK)
+                .map(|c| &mut c[..count])
+                .collect();
+            self.apply_columns(&tin_rows, &mut tout_rows);
             for (k, line) in tout.chunks_exact(BLOCK).enumerate() {
-                for (&v, &start) in line.iter().zip(&starts[..count]) {
-                    dst[start + k] = v;
+                for (&v, row) in line.iter().zip(dst.iter_mut()) {
+                    row[k] = v;
                 }
             }
         }
     }
 
-    /// Filters `cols` columns at once. Sample `k` of every input column
-    /// lies in `src` from `src_row(k)` on, and sample `k` of every output
-    /// column in `dst` from `dst_row(k)` on.
-    fn apply_columns(
-        &self,
-        src: &[f32],
-        src_row: impl Fn(usize) -> usize,
-        dst: &mut [f32],
-        dst_row: impl Fn(usize) -> usize,
-        cols: usize,
-    ) {
-        for k in 0..self.len {
-            let d = dst_row(k);
-            dst[d..d + cols].fill(0.0);
+    /// Filters columns side by side: `src[k]` holds sample `k` of every
+    /// input column, and `dst[k]` sample `k` of every output column, for
+    /// `k` below [`len`](Self::len).
+    fn apply_columns(&self, src: &[&[f32]], dst: &mut [&mut [f32]]) {
+        for out in dst.iter_mut() {
+            out.fill(0.0);
         }
         for op in &self.ops {
-            let d = dst_row(op.at);
-            let out = &mut dst[d..d + cols];
+            let out = &mut *dst[op.at];
             let mut terms = self.terms[op.terms.clone()].iter();
             if !op.accumulate {
                 match terms.next() {
                     Some(t) => {
-                        let s = src_row(t.src);
-                        for (o, &x) in out.iter_mut().zip(&src[s..s + cols]) {
+                        for (o, &x) in out.iter_mut().zip(src[t.src]) {
                             *o = x * t.coef * t.sfac;
                         }
                     }
@@ -218,13 +199,90 @@ impl Plan {
                 }
             }
             for t in terms {
-                let s = src_row(t.src);
-                for (o, &x) in out.iter_mut().zip(&src[s..s + cols]) {
+                for (o, &x) in out.iter_mut().zip(src[t.src]) {
                     *o += x * t.coef * t.sfac;
                 }
             }
         }
     }
+
+    /// [`apply_rows`](Self::apply_rows) on up to `threads` threads, each
+    /// filtering its share of the rows.
+    fn rows_parallel(&self, src: &[&[f32]], dst: &mut [&mut [f32]], threads: usize) {
+        let parts = shares(threads, src.len(), self.len);
+        if parts <= 1 {
+            return self.apply_rows(src, dst);
+        }
+        let size = src.len().div_ceil(parts);
+        std::thread::scope(|scope| {
+            for (src, dst) in src.chunks(size).zip(dst.chunks_mut(size)) {
+                scope.spawn(move || self.apply_rows(src, dst));
+            }
+        });
+    }
+
+    /// [`apply_columns`](Self::apply_columns) on up to `threads` threads,
+    /// each filtering its share of the columns.
+    fn columns_parallel(&self, src: &[&[f32]], dst: &mut [&mut [f32]], threads: usize) {
+        let cols = src.first().map_or(0, |row| row.len());
+        let parts = shares(threads, cols, self.len);
+        if parts <= 1 {
+            return self.apply_columns(src, dst);
+        }
+        let size = cols.div_ceil(parts);
+        let mut dst_parts: Vec<Vec<&mut [f32]>> = (0..parts).map(|_| Vec::new()).collect();
+        for row in dst.iter_mut() {
+            for (part, chunk) in dst_parts.iter_mut().zip(row.chunks_mut(size)) {
+                part.push(chunk);
+            }
+        }
+        std::thread::scope(|scope| {
+            for (i, mut dst) in dst_parts.into_iter().enumerate() {
+                let start = i * size;
+                let src: Vec<&[f32]> = src
+                    .iter()
+                    .map(|row| &row[start..(start + size).min(cols)])
+                    .collect();
+                scope.spawn(move || self.apply_columns(&src, &mut dst));
+            }
+        });
+    }
+}
+
+/// How many threads to split `lines` lines of `len` samples over, given
+/// up to `threads` of them. Each gets enough work to pay for starting it.
+fn shares(threads: usize, lines: usize, len: usize) -> usize {
+    const MIN_LINES: usize = 32;
+    const MIN_SAMPLES: usize = 1 << 16;
+    let by_lines = lines / MIN_LINES;
+    let by_samples = lines * len / MIN_SAMPLES;
+    threads.min(by_lines).min(by_samples).max(1)
+}
+
+/// The rows of the `cols` by `len` region of `data` at (`x`, `y`), for an
+/// image `width` samples wide.
+fn region(data: &[f32], width: usize, x: usize, y: usize, cols: usize, len: usize) -> Vec<&[f32]> {
+    data[y * width..]
+        .chunks(width)
+        .take(len)
+        .map(|row| &row[x..x + cols])
+        .collect()
+}
+
+/// Mutable version of [`region`].
+fn region_mut(
+    data: &mut [f32],
+    width: usize,
+    x: usize,
+    y: usize,
+    cols: usize,
+    len: usize,
+) -> Vec<&mut [f32]> {
+    data[y * width..]
+        .chunks_mut(width)
+        .take(len)
+        .map(|row| &mut row[x..x + cols])
+        .collect()
 }
 
 /// Plan for splitting a line of `n` samples into its low-pass half
@@ -528,37 +586,60 @@ fn synthesis_plan(n: usize, lo: &[f32], hi: &[f32], inv: bool) -> Plan {
 }
 
 /// Forward transform of the whole image in place, one wavelet tree node
-/// at a time.
-pub(crate) fn decompose(data: &mut [f32], width: usize, tree: &[WNode; W_TREE_LEN]) {
+/// at a time, on up to `threads` threads.
+pub(crate) fn decompose(
+    data: &mut [f32],
+    width: usize,
+    tree: &[WNode; W_TREE_LEN],
+    threads: usize,
+) {
     let mut tmp = vec![0.0f32; data.len()];
     for node in tree {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
         // Rows: image -> tmp.
         let rows = analysis_plan(lenx, &LOFILT, &HIFILT, node.inv_rw);
-        rows.apply_rows(data, |r| (y + r) * width + x, &mut tmp, |r| r * width, leny);
+        rows.rows_parallel(
+            &region(data, width, x, y, lenx, leny),
+            &mut region_mut(&mut tmp, width, 0, 0, lenx, leny),
+            threads,
+        );
         // Columns: tmp -> image.
         let cols = analysis_plan(leny, &LOFILT, &HIFILT, node.inv_cl);
-        cols.apply_columns(&tmp, |r| r * width, data, |r| (y + r) * width + x, lenx);
+        cols.columns_parallel(
+            &region(&tmp, width, 0, 0, lenx, leny),
+            &mut region_mut(data, width, x, y, lenx, leny),
+            threads,
+        );
     }
 }
 
-/// Inverse transform of the whole image in place. `lo` and `hi` are the
-/// synthesis filters as read from the transform table.
+/// Inverse transform of the whole image in place, on up to `threads`
+/// threads. `lo` and `hi` are the synthesis filters as read from the
+/// transform table.
 pub(crate) fn reconstruct(
     data: &mut [f32],
     width: usize,
     tree: &[WNode; W_TREE_LEN],
     lo: &[f32],
     hi: &[f32],
+    threads: usize,
 ) {
     let mut tmp = vec![0.0f32; data.len()];
     for node in tree.iter().rev() {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
         // Columns: image -> tmp.
         let cols = synthesis_plan(leny, lo, hi, node.inv_cl);
-        cols.apply_columns(data, |r| (y + r) * width + x, &mut tmp, |r| r * width, lenx);
+        cols.columns_parallel(
+            &region(data, width, x, y, lenx, leny),
+            &mut region_mut(&mut tmp, width, 0, 0, lenx, leny),
+            threads,
+        );
         // Rows: tmp -> image.
         let rows = synthesis_plan(lenx, lo, hi, node.inv_rw);
-        rows.apply_rows(&tmp, |r| r * width, data, |r| (y + r) * width + x, leny);
+        rows.rows_parallel(
+            &region(&tmp, width, 0, 0, lenx, leny),
+            &mut region_mut(data, width, x, y, lenx, leny),
+            threads,
+        );
     }
 }
