@@ -45,3 +45,4 @@ jobs:
       - run: cargo doc --no-deps --features image
         env:
           RUSTDOCFLAGS: -D warnings
+      - run: cargo package
