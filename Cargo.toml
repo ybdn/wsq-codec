@@ -10,7 +10,7 @@ documentation = "https://docs.rs/wsq-codec"
 readme = "README.md"
 keywords = ["wsq", "fingerprint", "biometrics", "image", "codec"]
 categories = ["multimedia::images", "compression"]
-exclude = [".claude", ".github", "CLAUDE.md"]
+exclude = [".github"]
 
 [dependencies]
 image = { version = "0.25.8", default-features = false, optional = true }
