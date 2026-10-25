@@ -22,43 +22,11 @@ use std::io::BufWriter;
 use std::path::Path;
 use std::{env, fs, process};
 
-/// Parses a binary PGM with a maximum value of 255.
-fn read_pgm(data: &[u8]) -> Result<(usize, usize, &[u8]), Box<dyn Error>> {
-    let mut fields = Vec::new();
-    let mut pos = 0;
-    while fields.len() < 4 {
-        match data.get(pos) {
-            None => return Err("truncated PGM header".into()),
-            Some(b'#') => {
-                while data.get(pos).is_some_and(|&b| b != b'\n') {
-                    pos += 1;
-                }
-            }
-            Some(b) if b.is_ascii_whitespace() => pos += 1,
-            Some(_) => {
-                let start = pos;
-                while data.get(pos).is_some_and(|b| !b.is_ascii_whitespace()) {
-                    pos += 1;
-                }
-                fields.push(std::str::from_utf8(&data[start..pos])?);
-            }
-        }
-    }
-    if fields[0] != "P5" || fields[3] != "255" {
-        return Err("only 8-bit binary PGM (P5) is supported".into());
-    }
-    let (width, height): (usize, usize) = (fields[1].parse()?, fields[2].parse()?);
-    let pixels = data
-        .get(pos + 1..pos + 1 + width * height)
-        .ok_or("truncated PGM data")?;
-    Ok((width, height, pixels))
-}
-
 fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args {
         [cmd, input, output, rest @ ..] if cmd == "encode" && rest.len() <= 2 => {
             let data = fs::read(input)?;
-            let (width, height, pixels) = read_pgm(&data)?;
+            let (width, height, pixels) = corpus::read_pgm(&data)?;
             let mut options = wsq_codec::EncodeOptions::default();
             if let Some(bitrate) = rest.first() {
                 options.bitrate = bitrate.parse()?;

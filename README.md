@@ -93,6 +93,13 @@ for the `N`th stream inside another file `name.ext`. `.raw` files hold the bare 
 cargo run --release --example wsq -- extract case.eft   # case.1.wsq, case.2.wsq, ...
 ```
 
+`tests/corpus.rs` runs the same check under `cargo test` when `WSQ_CORPUS_DIR` names a corpus,
+and does nothing otherwise, so the corpus never has to leave the machine that holds it:
+
+```sh
+WSQ_CORPUS_DIR=/path/to/corpus cargo test --release --test corpus -- --nocapture
+```
+
 ## Differences from NBIS
 
 The encoder departs from NBIS only where NBIS's output is broken:
@@ -129,4 +136,5 @@ only.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The test fixtures in `tests/data` were written by NIST's NBIS,
+which is in the public domain; see [tests/data/README.md](tests/data/README.md).
