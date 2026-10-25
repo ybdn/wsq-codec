@@ -27,3 +27,20 @@ python3 make_fixtures.py ./nbis ./nbis_even
 
 The script prints the hash of each image the reference decoder
 produces; `tests/nbis.rs` holds the same values.
+
+## Real-world files
+
+Results of `cargo run --release --example wsq -- check`, with reference decodes from NBIS 5.0.0's
+decoder (`harness d`, built as above). None of these files is committed here.
+
+| source | encoder | streams | outcome |
+|---|---|---|---|
+| NIST's ANSI/NIST-ITL 2011 sample transactions, as shipped in the test resources of [JNBIS](https://github.com/mhshams/jnbis) (commit `4905b61`): 34 `.an2` files with Type-4, Type-13, Type-14 and Type-15 records | unknown, NBIS-style NISTCOM comments, implementation number 0 | 63 | all decode, identical to NBIS |
+| `sample.wsq` from the same test resources | Cognaxon (its comment names it); NISTCOM with `PIX_DEPTH 24` | 1 | decodes, identical to NBIS |
+| 96 images generated locally: 8 sizes from 81×81 to 1608×1000, ridges, noise and gradients, at 0.3, 0.75, 2.25 and 4.0 bits per pixel | this crate | 96 | NBIS and JNBIS (its Java port, same commit) decode them to the same pixels as this crate |
+
+JNBIS also decodes the 64 streams above to the same pixels as NBIS. Being a port of NBIS, it
+is not an independent check of the format, only of the implementations.
+
+Several of the NIST streams, 1608×1000 slaps among them, carry `PPI 255` in their NISTCOM
+comment, which is the comment's own value: the resolution to trust is the record's.

@@ -31,6 +31,7 @@
 //! # }
 //! ```
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -39,13 +40,16 @@ mod decode;
 mod encode;
 mod error;
 mod huffman;
+#[cfg(feature = "image")]
+pub mod image;
 mod nistcom;
+mod par;
 mod quant;
 mod tables;
 mod tree;
 mod wavelet;
 
-pub use error::{DecodeError, EncodeError};
+pub use error::{DecodeError, EncodeError, ReadError, WriteError};
 
 /// Default for [`DecodeOptions::max_pixels`]: 100 million pixels, which
 /// covers a 1000 ppi palm print (about 44 million) with room to spare.
@@ -55,9 +59,9 @@ pub const DEFAULT_MAX_PIXELS: usize = 100_000_000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Image {
-    /// Width in pixels.
+    /// Width in pixels, at most 65535 as the format allows.
     pub width: usize,
-    /// Height in pixels.
+    /// Height in pixels, at most 65535 as the format allows.
     pub height: usize,
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.
@@ -70,9 +74,9 @@ pub struct Image {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Info {
-    /// Width in pixels.
+    /// Width in pixels, at most 65535 as the format allows.
     pub width: usize,
-    /// Height in pixels.
+    /// Height in pixels, at most 65535 as the format allows.
     pub height: usize,
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.
@@ -98,12 +102,17 @@ pub struct DecodeOptions {
     /// frame header alone decides the size, so a small crafted stream can
     /// otherwise claim an image of several gigapixels.
     pub max_pixels: Option<usize>,
+    /// Number of threads to split the work over: 1, the default, keeps it
+    /// all on the calling thread, and 0 uses one thread per core. The
+    /// output does not depend on it.
+    pub threads: usize,
 }
 
 impl Default for DecodeOptions {
     fn default() -> Self {
         DecodeOptions {
             max_pixels: Some(DEFAULT_MAX_PIXELS),
+            threads: 1,
         }
     }
 }
@@ -112,6 +121,12 @@ impl DecodeOptions {
     /// Sets [`max_pixels`](Self::max_pixels).
     pub fn with_max_pixels(mut self, max_pixels: Option<usize>) -> Self {
         self.max_pixels = max_pixels;
+        self
+    }
+
+    /// Sets [`threads`](Self::threads).
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
         self
     }
 }
@@ -145,6 +160,10 @@ pub struct EncodeOptions {
     /// Implementation number the FBI assigned to the encoder, written in
     /// the frame header. 0, the default, means unassigned.
     pub software: u16,
+    /// Number of threads to split the work over: 1, the default, keeps it
+    /// all on the calling thread, and 0 uses one thread per core. The
+    /// output does not depend on it.
+    pub threads: usize,
 }
 
 impl Default for EncodeOptions {
@@ -154,6 +173,7 @@ impl Default for EncodeOptions {
             ppi: None,
             comments: Vec::new(),
             software: 0,
+            threads: 1,
         }
     }
 }
@@ -182,6 +202,20 @@ impl EncodeOptions {
         self.software = software;
         self
     }
+
+    /// Sets [`threads`](Self::threads).
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
+    }
+}
+
+/// Resolves a `threads` option: 0 means one thread per core.
+fn thread_count(threads: usize) -> usize {
+    match threads {
+        0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+        n => n,
+    }
 }
 
 /// Decodes a WSQ stream with the default [`DecodeOptions`], which reject
@@ -193,6 +227,24 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
 /// Decodes a WSQ stream.
 pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
     decode::decode(data, options)
+}
+
+/// Reads a whole WSQ stream from `reader` and decodes it.
+///
+/// The wavelet transform needs every coefficient before it can produce a
+/// single pixel, so this reads `reader` to its end first: give it a reader
+/// that ends with the stream, for instance through [`Read::take`] when the
+/// stream sits inside a larger file, which also bounds the memory a
+/// stream from an untrusted source can claim.
+///
+/// [`Read::take`]: std::io::Read::take
+pub fn decode_from<R: std::io::Read>(
+    mut reader: R,
+    options: &DecodeOptions,
+) -> Result<Image, ReadError> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    Ok(decode_with(&data, options)?)
 }
 
 /// Reads the dimensions, resolution and comments of a WSQ stream without
@@ -213,4 +265,17 @@ pub fn encode(
     options: &EncodeOptions,
 ) -> Result<Vec<u8>, EncodeError> {
     encode::encode(pixels, width, height, options)
+}
+
+/// Encodes an image as [`encode`] does and writes the stream to `writer`.
+pub fn encode_to<W: std::io::Write>(
+    mut writer: W,
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    options: &EncodeOptions,
+) -> Result<(), WriteError> {
+    writer.write_all(&encode(pixels, width, height, options)?)?;
+    writer.flush()?;
+    Ok(())
 }

@@ -117,6 +117,21 @@ fn merges_a_caller_nistcom_comment() {
 }
 
 #[test]
+fn threads_do_not_change_the_output() {
+    // Large enough for the wavelet to split its first levels over threads.
+    let (w, h) = (1031, 777);
+    let pixels = ridges(w, h);
+    let wsq = encode(&pixels, w, h, &EncodeOptions::default()).unwrap();
+    let image = decode(&wsq).unwrap();
+    for threads in [0, 2, 3, 8] {
+        let options = EncodeOptions::default().with_threads(threads);
+        assert_eq!(encode(&pixels, w, h, &options).unwrap(), wsq, "{threads}");
+        let options = DecodeOptions::default().with_threads(threads);
+        assert_eq!(decode_with(&wsq, &options).unwrap(), image, "{threads}");
+    }
+}
+
+#[test]
 fn encoder_rejects_bad_input() {
     let opts = EncodeOptions::default();
     let px = vec![0u8; 100 * 100];
