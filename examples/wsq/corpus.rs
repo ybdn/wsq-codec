@@ -10,13 +10,46 @@
 //!   any other file `name.ext`, numbered as `extract` writes them.
 //!
 //! `.raw` files hold `width * height` bytes, as NBIS's `dwsq` writes them
-//! with its raw output option.
+//! with its raw output option. `.pgm` files are binary 8-bit PGM (P5),
+//! which `read_pgm` also parses for the PGM conversions.
 
 use std::error::Error;
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+/// Parses a binary PGM with a maximum value of 255.
+pub fn read_pgm(data: &[u8]) -> Result<(usize, usize, &[u8]), Box<dyn Error>> {
+    let mut fields = Vec::new();
+    let mut pos = 0;
+    while fields.len() < 4 {
+        match data.get(pos) {
+            None => return Err("truncated PGM header".into()),
+            Some(b'#') => {
+                while data.get(pos).is_some_and(|&b| b != b'\n') {
+                    pos += 1;
+                }
+            }
+            Some(b) if b.is_ascii_whitespace() => pos += 1,
+            Some(_) => {
+                let start = pos;
+                while data.get(pos).is_some_and(|b| !b.is_ascii_whitespace()) {
+                    pos += 1;
+                }
+                fields.push(std::str::from_utf8(&data[start..pos])?);
+            }
+        }
+    }
+    if fields[0] != "P5" || fields[3] != "255" {
+        return Err("only 8-bit binary PGM (P5) is supported".into());
+    }
+    let (width, height): (usize, usize) = (fields[1].parse()?, fields[2].parse()?);
+    let pixels = data
+        .get(pos + 1..pos + 1 + width * height)
+        .ok_or("truncated PGM data")?;
+    Ok((width, height, pixels))
+}
 
 /// Whether a WSQ start-of-image marker followed by another WSQ marker
 /// starts at `i`.
@@ -112,7 +145,7 @@ fn reference(path: &Path, n: usize) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         return Ok(Some(raw));
     }
     match fs::read(sibling(path, n, "pgm")) {
-        Ok(pgm) => Ok(Some(super::read_pgm(&pgm)?.2.to_vec())),
+        Ok(pgm) => Ok(Some(read_pgm(&pgm)?.2.to_vec())),
         Err(_) => Ok(None),
     }
 }
