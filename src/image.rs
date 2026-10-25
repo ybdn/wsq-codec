@@ -9,7 +9,7 @@
 //! let gray = GrayImage::from_fn(256, 200, |x, y| image::Luma([((x * 7 + y * 3) % 200) as u8]));
 //! let wsq = wsq_codec::image::encode_gray_image(&gray, &EncodeOptions::default())?;
 //!
-//! let decoded: GrayImage = wsq_codec::decode(&wsq)?.into();
+//! let decoded = GrayImage::try_from(wsq_codec::decode(&wsq)?)?;
 //! assert_eq!(decoded.dimensions(), (256, 200));
 //!
 //! // Or let `image` open WSQ files itself.
@@ -20,16 +20,27 @@
 
 use std::io::Read;
 
-use ::image::error::{DecodingError, ImageFormatHint};
+use ::image::error::{DecodingError, ImageFormatHint, ParameterError, ParameterErrorKind};
 use ::image::{ColorType, GrayImage, ImageDecoder, ImageError, ImageResult};
 
 use crate::{DecodeError, DecodeOptions, EncodeError, EncodeOptions, Image, Info};
 
-impl From<Image> for GrayImage {
-    fn from(image: Image) -> Self {
+/// Converts a decoded image. This fails with a parameter error when the
+/// pixel buffer no longer holds `width * height` bytes, which only happens
+/// if the public fields of the [`Image`] were changed after decoding.
+impl TryFrom<Image> for GrayImage {
+    type Error = ImageError;
+
+    fn try_from(image: Image) -> Result<Self, Self::Error> {
+        let mismatch = || {
+            ImageError::Parameter(ParameterError::from_kind(
+                ParameterErrorKind::DimensionMismatch,
+            ))
+        };
         // The format limits both dimensions to 65535.
-        GrayImage::from_raw(image.width as u32, image.height as u32, image.pixels)
-            .expect("a decoded image holds width * height pixels")
+        let width = u32::try_from(image.width).map_err(|_| mismatch())?;
+        let height = u32::try_from(image.height).map_err(|_| mismatch())?;
+        GrayImage::from_raw(width, height, image.pixels).ok_or_else(mismatch)
     }
 }
 

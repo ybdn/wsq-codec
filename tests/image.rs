@@ -16,7 +16,7 @@ fn gray_images_round_trip() {
     let wsq = encode_gray_image(&gray, &EncodeOptions::default().with_bitrate(2.25)).unwrap();
     let image = decode(&wsq).unwrap();
     let pixels = image.pixels.clone();
-    let decoded: GrayImage = image.into();
+    let decoded = GrayImage::try_from(image).unwrap();
     assert_eq!(decoded.dimensions(), gray.dimensions());
     assert_eq!(decoded.as_raw(), &pixels);
 }
@@ -59,4 +59,14 @@ fn image_opens_wsq_once_hooked() {
     let opened = image::open(&path);
     std::fs::remove_file(&path).unwrap();
     assert_eq!(opened.unwrap().to_luma8().as_raw(), &expected);
+}
+
+#[test]
+fn a_modified_image_does_not_convert() {
+    let mut image = wsq_codec::decode(
+        &wsq_codec::encode(sample().as_raw(), 150, 120, &Default::default()).unwrap(),
+    )
+    .unwrap();
+    image.pixels.clear();
+    assert!(GrayImage::try_from(image).is_err());
 }
