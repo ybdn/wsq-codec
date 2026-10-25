@@ -121,7 +121,7 @@ hits a rounding difference could still get a quantizer bin that differs in its l
 ## Performance
 
 The fastest of 5 runs on generated images, in memory, on a 4-core cloud x86-64 machine
-(`cargo run --release --example bench -- THREADS`):
+(`cargo bench --bench codec -- THREADS`):
 
 | image | encode, 1 thread | decode, 1 thread | encode, 4 threads | decode, 4 threads |
 |---|---|---|---|---|
