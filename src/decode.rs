@@ -6,7 +6,7 @@ use crate::tables::{
     self, COM, DHT, DQT, DTT, EOI, FrameHeader, MAX_DHT_TABLES, SOB, SOF, SOI, TransformTable,
 };
 use crate::tree::Trees;
-use crate::{DecodeOptions, Image, Info, nistcom, wavelet};
+use crate::{DecodeOptions, Image, Info, nistcom, par, wavelet};
 
 /// Tables defined so far in a stream.
 #[derive(Default)]
@@ -187,23 +187,24 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
     }
     let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q);
     drop(coeffs);
+    let threads = crate::thread_count(options.threads);
     wavelet::reconstruct(
         &mut data,
         width,
         &trees.w,
         &transform.lo,
         &transform.hi,
-        crate::thread_count(options.threads),
+        threads,
     );
 
-    let pixels = data
-        .iter()
-        .map(|&v| {
+    let mut pixels = vec![0u8; data.len()];
+    par::zip_chunks(&data, &mut pixels, threads, |data, pixels| {
+        for (p, &v) in pixels.iter_mut().zip(data) {
             let v = (f64::from(v * frame.r_scale + frame.m_shift) + 0.5) as f32;
             // Also maps NaN, from absurd tables, to 0.
-            v.clamp(0.0, 255.0) as u8
-        })
-        .collect();
+            *p = v.clamp(0.0, 255.0) as u8;
+        }
+    });
     Ok(Image {
         width,
         height,

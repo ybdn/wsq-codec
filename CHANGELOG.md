@@ -33,8 +33,8 @@ First release.
 - `image` feature, off by default: conversion to `image::GrayImage`,
   `image::encode_gray_image`, and a `WsqDecoder` that `image::register_hooks`
   lets the `image` crate use for `.wsq` files.
-- `threads` in `EncodeOptions` and `DecodeOptions` splits the wavelet
-  transform over threads without changing the output.
+- `threads` in `EncodeOptions` and `DecodeOptions` splits the work over
+  threads without changing the output.
 
 ### Tools
 

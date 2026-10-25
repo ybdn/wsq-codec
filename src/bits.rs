@@ -170,8 +170,9 @@ impl BitReader<'_, '_> {
 /// Big-endian writer of entropy-coded data with byte stuffing.
 pub(crate) struct BitWriter<'a> {
     out: &'a mut Vec<u8>,
-    acc: u8,
-    nbits: u8,
+    /// Bits not yet written, in the low `nbits` bits.
+    acc: u64,
+    nbits: u32,
 }
 
 impl<'a> BitWriter<'a> {
@@ -183,13 +184,19 @@ impl<'a> BitWriter<'a> {
         }
     }
 
-    /// Writes the low `size` bits of `code`, most significant first.
+    /// Writes the low `size` bits of `code` (at most 16), most significant
+    /// first.
     pub fn put(&mut self, code: u16, size: u8) {
-        for i in (0..size).rev() {
-            self.acc = (self.acc << 1) | ((code >> i) & 1) as u8;
-            self.nbits += 1;
-            if self.nbits == 8 {
-                self.emit();
+        let size = u32::from(size);
+        let bits = u64::from(code) & ((1 << size) - 1);
+        self.acc = (self.acc << size) | bits;
+        self.nbits += size;
+        while self.nbits >= 8 {
+            self.nbits -= 8;
+            let byte = (self.acc >> self.nbits) as u8;
+            self.out.push(byte);
+            if byte == 0xFF {
+                self.out.push(0);
             }
         }
     }
@@ -197,21 +204,9 @@ impl<'a> BitWriter<'a> {
     /// Pads the last byte with one bits.
     pub fn flush(mut self) {
         if self.nbits > 0 {
-            while self.nbits < 8 {
-                self.acc = (self.acc << 1) | 1;
-                self.nbits += 1;
-            }
-            self.emit();
+            let pad = 8 - self.nbits as u8;
+            self.put((1 << pad) - 1, pad);
         }
-    }
-
-    fn emit(&mut self) {
-        self.out.push(self.acc);
-        if self.acc == 0xFF {
-            self.out.push(0);
-        }
-        self.acc = 0;
-        self.nbits = 0;
     }
 }
 
