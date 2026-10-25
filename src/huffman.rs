@@ -253,12 +253,20 @@ impl EncodeTable {
     }
 }
 
-/// Lookup tables for decoding, as in Annex F.2.2.3 of the JPEG standard.
+/// Number of bits [`DecodeTable`] looks codes up by at once.
+const LOOKUP_BITS: u32 = 9;
+
+/// Lookup tables for decoding, as in Annex F.2.2.3 of the JPEG standard,
+/// plus a table of the codes of at most [`LOOKUP_BITS`] bits.
 pub(crate) struct DecodeTable {
     maxcode: [i32; MAX_HUFFBITS + 1],
     mincode: [i32; MAX_HUFFBITS + 1],
     valptr: [usize; MAX_HUFFBITS + 1],
     values: Vec<u8>,
+    /// For each value of the next `LOOKUP_BITS` bits, the length of the
+    /// code they start with and its symbol, or a length of 0 when that
+    /// code is longer.
+    lookup: [(u8, u8); 1 << LOOKUP_BITS],
 }
 
 /// One decoded item of entropy-coded data.
@@ -291,7 +299,16 @@ impl DecodeTable {
             mincode: [0; MAX_HUFFBITS + 1],
             valptr: [0; MAX_HUFFBITS + 1],
             values: spec.values.clone(),
+            lookup: [(0, 0); 1 << LOOKUP_BITS],
         };
+        for ((&code, &size), &sym) in codes.iter().zip(&sizes).zip(&spec.values) {
+            let size = u32::from(size);
+            if size <= LOOKUP_BITS {
+                let first = usize::from(code) << (LOOKUP_BITS - size);
+                let count = 1 << (LOOKUP_BITS - size);
+                table.lookup[first..first + count].fill((size as u8, sym));
+            }
+        }
         let mut k = 0;
         for len in 1..=MAX_HUFFBITS {
             let n = usize::from(spec.bits[len - 1]);
@@ -309,6 +326,14 @@ impl DecodeTable {
     /// Decodes the next symbol, or returns `Err` with the marker that
     /// ends the block.
     fn symbol(&self, r: &mut BitReader<'_, '_>) -> Result<Result<u8, u16>, DecodeError> {
+        if let Some(bits) = r.peek(LOOKUP_BITS) {
+            let (size, sym) = self.lookup[usize::from(bits)];
+            if size > 0 {
+                r.consume(u32::from(size));
+                return Ok(Ok(sym));
+            }
+        }
+        // Longer codes, and codes near the end of the data, go bit by bit.
         let mut code = match r.bit()? {
             Bit::Bit(b) => i32::from(b),
             Bit::Marker(m) => return Ok(Err(m)),

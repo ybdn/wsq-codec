@@ -246,7 +246,7 @@ pub(crate) fn unquantize(
     q_tree: &[QNode; Q_TREE_LEN],
 ) -> Vec<f32> {
     let mut data = vec![0.0f32; width * height];
-    let mut coeffs = coeffs.iter().copied();
+    let mut coeffs = coeffs;
     let c = table.bin_center;
     for (cnt, node) in q_tree.iter().enumerate().take(NUM_SUBBANDS) {
         let qbin = table.q_bin[cnt];
@@ -255,8 +255,10 @@ pub(crate) fn unquantize(
         }
         let half_z = f64::from(table.z_bin[cnt]) / 2.0;
         for row in node.y..node.y + node.leny {
-            for out in &mut data[row * width + node.x..row * width + node.x + node.lenx] {
-                let s = coeffs.next().unwrap_or(0);
+            let (line, rest) = coeffs.split_at(node.lenx.min(coeffs.len()));
+            coeffs = rest;
+            let out = &mut data[row * width + node.x..row * width + node.x + node.lenx];
+            for (out, &s) in out.iter_mut().zip(line) {
                 *out = match s.signum() {
                     0 => 0.0,
                     1 => (f64::from(qbin * (f32::from(s) - c)) + half_z) as f32,
