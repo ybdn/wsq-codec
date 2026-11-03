@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The encoder computes the logarithms and powers of its bit allocation itself, correctly
+  rounded, instead of calling the platform's math library: its output is now the same on every
+  platform. It is unchanged wherever glibc rounded correctly, which covers the NBIS fixtures.
 - `inspect::read_quantized` returns the header parameters, bin widths and bin indices of a
   stream, the values the FBI's certification compares.
 - The `wsq` example's `cert` commands run the certification tests locally and compare the

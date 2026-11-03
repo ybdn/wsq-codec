@@ -78,8 +78,8 @@ The plan is to certify a frozen, conformant encoder and decoder while the rest o
 keeps improving:
 
 - a conformant profile, the current encoder, whose output stays aligned with the reference
-  implementation and becomes independent of the platform's math library; only it may write the
-  implementation number the FBI assigns;
+  implementation and, since it computes its own logarithms and powers, does not depend on the
+  platform; only it may write the implementation number the FBI assigns;
 - an optimized profile, free to depart from the reference as long as every WSQ decoder reads
   its output, and never certified;
 - the conformant code in its own crate, versioned with the certificate, so that releases of the
@@ -89,9 +89,11 @@ keeps improving:
 
 - **Implementation number.** It is assigned through the certification process; there is nothing to
   pick in advance. Until then, keep `software = 0`.
-- **Per-configuration scope.** Byte-identical encoding depends on the platform's `pow` and `log`
-  (see the README). Each OS/compiler to be certified needs its own run, and a toolchain update
-  could in principle require a new one.
+- **Per-configuration scope.** The certificate still names one configuration, but the encoder's
+  output no longer depends on the platform's math library: logarithms and powers are computed
+  in the crate and correctly rounded (`src/math.rs`), and the rest is IEEE 754 arithmetic that
+  rounds alike everywhere. Every platform should therefore produce the same files, which `cert
+  compare` can confirm between platforms before each submission.
 - **Images below 81 pixels, and the flat-image widening** (README, "Differences from NBIS") depart
   from NBIS. Check that no certification image triggers them.
 - **Decision (maintainer).** Whether the crate's users need the certificate. Without it the crate

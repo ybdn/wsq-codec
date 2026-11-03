@@ -43,6 +43,7 @@ mod huffman;
 #[cfg(feature = "image")]
 pub mod image;
 pub mod inspect;
+mod math;
 mod nistcom;
 mod par;
 mod quant;
