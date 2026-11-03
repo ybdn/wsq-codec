@@ -100,6 +100,12 @@ and does nothing otherwise, so the corpus never has to leave the machine that ho
 WSQ_CORPUS_DIR=/path/to/corpus cargo test --release --test corpus -- --nocapture
 ```
 
+## Certification
+
+The crate is not certified by the FBI. `docs/certification.md` describes the procedure, the
+plan to pursue it, and the `cert` commands of the example, which run the certification tests
+locally and compare the output with NIST's reference files.
+
 ## Differences from NBIS
 
 The encoder departs from NBIS only where NBIS's output is broken:

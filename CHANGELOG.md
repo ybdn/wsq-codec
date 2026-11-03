@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `inspect::read_quantized` returns the header parameters, bin widths and bin indices of a
+  stream, the values the FBI's certification compares.
+- The `wsq` example's `cert` commands run the certification tests locally and compare the
+  output with NIST's reference files (see `docs/certification.md`).
+
 ## 0.1.1
 
 No code change. The repository history was rewritten after 0.1.0, so this release records the

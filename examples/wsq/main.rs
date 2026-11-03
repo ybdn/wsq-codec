@@ -7,13 +7,16 @@
 //! cargo run --release --example wsq -- info in.wsq
 //! cargo run --release --example wsq -- check DIR
 //! cargo run --release --example wsq -- extract FILE
+//! cargo run --release --example wsq -- cert encode|decode|compare ...
 //! ```
 //!
 //! `check` decodes every WSQ stream under DIR, including streams inside
 //! other files such as ANSI/NIST-ITL transactions, and compares them with
 //! reference decodes stored next to them (see `corpus.rs`). `extract`
-//! writes the WSQ streams inside a file next to it.
+//! writes the WSQ streams inside a file next to it. `cert` runs the FBI
+//! certification tests locally (see `cert.rs` and docs/certification.md).
 
+mod cert;
 mod corpus;
 
 use std::error::Error;
@@ -59,10 +62,15 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         }
         [cmd, dir] if cmd == "check" => corpus::check(Path::new(dir))?,
         [cmd, file] if cmd == "extract" => corpus::extract(Path::new(file))?,
+        [cmd, rest @ ..] if cmd == "cert" => {
+            if !cert::run(rest)? {
+                process::exit(2);
+            }
+        }
         _ => {
             return Err(
                 "usage: wsq encode IN.pgm OUT.wsq [BITRATE] [PPI] | decode IN.wsq OUT.pgm \
-                        | info IN.wsq | check DIR | extract FILE"
+                        | info IN.wsq | check DIR | extract FILE | cert ..."
                     .into(),
             );
         }
