@@ -5,7 +5,7 @@ Thanks for your interest in `wsq-codec`.
 **Never attach or commit real fingerprints, or any file from NIST's certification test set.**
 They are biometric data (a special category under GDPR article 9) or data NIST supplies on
 request. Use synthetic images, or describe a stream with the output of
-`cargo run --release --example wsq -- info FILE`.
+`wsq info FILE`.
 
 Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes, not in an issue.
 

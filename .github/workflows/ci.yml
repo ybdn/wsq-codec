@@ -32,6 +32,7 @@ jobs:
       - run: cargo test --doc
       - run: cargo test --all-targets --features image
       - run: cargo test --doc --features image
+      - run: cargo test -p wsq-cli
       - run: cargo bench --bench codec -- 1 1 --check
       - run: cargo bench --bench codec -- 0 1 --check
 
@@ -72,6 +73,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo clippy --all-targets --features image -- -D warnings
+      - run: cargo clippy -p wsq-cli --all-targets -- -D warnings
       - run: cargo doc --no-deps --features image
         env:
           RUSTDOCFLAGS: -D warnings
