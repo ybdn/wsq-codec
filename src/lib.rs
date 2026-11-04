@@ -402,6 +402,7 @@ pub fn encode(
         width,
         height,
         options,
+        encode::Rate::Allocated,
         &mut wavelet::Scratch::default(),
     )
 }
@@ -447,7 +448,14 @@ impl Encoder {
         width: usize,
         height: usize,
     ) -> Result<Vec<u8>, EncodeError> {
-        encode::encode(pixels, width, height, &self.options, &mut self.scratch)
+        encode::encode(
+            pixels,
+            width,
+            height,
+            &self.options,
+            encode::Rate::Allocated,
+            &mut self.scratch,
+        )
     }
 }
 
@@ -467,4 +475,59 @@ pub fn encode_to<W: std::io::Write>(
     writer.write_all(&encode(pixels, width, height, options)?)?;
     writer.flush()?;
     Ok(())
+}
+
+/// Experimental encoding outside the reference implementation, for
+/// measurement only.
+///
+/// Nothing here is covered by semantic versioning: it may change or go in
+/// any release. It is a prototype for issue #42, ahead of the encoding
+/// profiles of issue #44.
+#[doc(hidden)]
+pub mod experimental {
+    use crate::{EncodeError, EncodeOptions, encode, wavelet};
+
+    /// Share of the requested size [`encode_at_rate`] may fall short by
+    /// when it stops: 0.005, half a percent.
+    pub const RATE_TOLERANCE: f64 = encode::HIT_TOLERANCE;
+
+    /// Encodes an image so that the whole stream comes as close as it can
+    /// to `options.bitrate` bits per pixel without exceeding it.
+    ///
+    /// The stream has the conformant encoder's layout and tables; only the
+    /// quantizer bin widths differ: those of the specification's bit
+    /// allocation, all multiplied by one factor that a search chooses on
+    /// the length of the whole stream (headers, tables, comments and
+    /// entropy-coded data). The search stops on the first stream within
+    /// [`RATE_TOLERANCE`] below the target, or after 40 streams, and keeps
+    /// the longest stream that fits; when no factor fits, the shortest
+    /// stream it wrote. The output depends neither on the platform nor on
+    /// `options.threads`.
+    ///
+    /// Any WSQ decoder reads the result, but it is not what the reference
+    /// implementation writes for the same rate, so it is never conformant:
+    /// the frame header always carries implementation number 0, whatever
+    /// `options.software` says. The NISTCOM comment records the requested
+    /// rate. It costs one quantization and one Huffman coding per stream
+    /// tried, and keeps the transformed image (4 bytes per pixel) until the
+    /// end.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`EncodeError`] that [`encode`](crate::encode) gives.
+    pub fn encode_at_rate(
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+        options: &EncodeOptions,
+    ) -> Result<Vec<u8>, EncodeError> {
+        encode::encode(
+            pixels,
+            width,
+            height,
+            options,
+            encode::Rate::Hit,
+            &mut wavelet::Scratch::default(),
+        )
+    }
 }
