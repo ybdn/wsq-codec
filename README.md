@@ -173,6 +173,11 @@ The fastest of 5 runs on generated images, in memory, on a 4-core cloud x86-64 m
 | 1000 ppi, 1600×1500 | 49 ms | 45 ms | 30 ms | 34 ms |
 | 1000 ppi palm, 5500×8000 | 1.07 s | 1.08 s | 0.55 s | 0.62 s |
 
+`docs/nbis-comparison.md` compares speed and memory with NBIS 5.0.0 (distributions over repeated
+calls, one process per call, one and four threads), with the protocol, the conditions and the
+limits; `bench/nbis-compare` repeats it. It is a measurement on synthetic images on one machine, not
+a claim for other cases.
+
 The work stays on the calling thread unless `EncodeOptions::threads` or
 `DecodeOptions::threads` asks for more (0 means one per core). The wavelet transform is split
 by rows and by columns, quantization by subbands, and the conversions between pixels and

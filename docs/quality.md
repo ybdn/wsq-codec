@@ -87,3 +87,5 @@ Streams written earlier by NBIS, on another machine for instance, are compared w
 that. `WSQ_QUALITY_DIR` names a local directory of 8-bit PGM files to measure as well; it stays
 outside the repository, and no real fingerprint is ever committed. The optimized encoder of
 phase 3 of #17 is to be measured with the same command and compared with this table.
+
+Speed and memory against NBIS are in [nbis-comparison.md](nbis-comparison.md).

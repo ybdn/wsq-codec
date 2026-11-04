@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A comparison with NBIS 5.0.0 for speed and memory: `bench/nbis-compare` (outside the published
+  package and the workspace, with its own lock files) times NBIS's `wsq_encode_mem` and
+  `wsq_decode_mem` and this crate in separate processes, one call each, interleaved, with
+  distributions (minimum, median, 90th percentile, maximum), peak resident memory, one and four
+  threads, and optionally the crates.io release next to the checkout. It first checks that streams
+  and pixels are identical to NBIS's in both directions (96 checks) and records the load, the
+  revision and the NBIS archive's SHA-256. `docs/nbis-comparison.md` has the protocol, the first
+  results of 4 November 2026 and their limits (synthetic images, one machine with uncontrolled
+  load, builds named), the prior-art search, and the wording the figures allow.
 - A quality benchmark, `cargo bench --bench quality` (`benches/quality.rs`): it encodes
   integer-generated images at 0.5, 0.75, 1.0 and 2.25 bits per pixel (`--rates` changes them) and
   reports, per image and rate, the file size, the actual bit rate against the requested one, the

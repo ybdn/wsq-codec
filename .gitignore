@@ -4,3 +4,8 @@ Cargo.lock
 /fuzz/corpus
 /fuzz/artifacts
 /fuzz/coverage
+
+# The NBIS comparison (bench/nbis-compare) is not a library: it commits its lock files.
+!/bench/nbis-compare/Cargo.lock
+!/bench/nbis-compare/Cargo.released.lock
+/bench/nbis-compare/target

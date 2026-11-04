@@ -1,0 +1,96 @@
+ridges_800x750 0.75 current/1 encoder stream vs NBIS: identical (56089 bytes)
+ridges_800x750 0.75 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 0.75 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_800x750 0.75 current/4 encoder stream vs NBIS: identical (56089 bytes)
+ridges_800x750 0.75 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 0.75 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_800x750 0.75 released/1 encoder stream vs NBIS: identical (56089 bytes)
+ridges_800x750 0.75 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 0.75 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_800x750 0.75 released/4 encoder stream vs NBIS: identical (56089 bytes)
+ridges_800x750 0.75 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 0.75 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_800x750 2.25 current/1 encoder stream vs NBIS: identical (184038 bytes)
+ridges_800x750 2.25 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 2.25 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_800x750 2.25 current/4 encoder stream vs NBIS: identical (184038 bytes)
+ridges_800x750 2.25 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 2.25 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_800x750 2.25 released/1 encoder stream vs NBIS: identical (184038 bytes)
+ridges_800x750 2.25 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 2.25 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_800x750 2.25 released/4 encoder stream vs NBIS: identical (184038 bytes)
+ridges_800x750 2.25 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_800x750 2.25 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 0.75 current/1 encoder stream vs NBIS: identical (220487 bytes)
+ridges_1600x1500 0.75 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 0.75 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 0.75 current/4 encoder stream vs NBIS: identical (220487 bytes)
+ridges_1600x1500 0.75 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 0.75 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 0.75 released/1 encoder stream vs NBIS: identical (220487 bytes)
+ridges_1600x1500 0.75 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 0.75 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 0.75 released/4 encoder stream vs NBIS: identical (220487 bytes)
+ridges_1600x1500 0.75 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 0.75 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 2.25 current/1 encoder stream vs NBIS: identical (733681 bytes)
+ridges_1600x1500 2.25 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 2.25 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 2.25 current/4 encoder stream vs NBIS: identical (733681 bytes)
+ridges_1600x1500 2.25 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 2.25 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 2.25 released/1 encoder stream vs NBIS: identical (733681 bytes)
+ridges_1600x1500 2.25 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 2.25 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+ridges_1600x1500 2.25 released/4 encoder stream vs NBIS: identical (733681 bytes)
+ridges_1600x1500 2.25 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+ridges_1600x1500 2.25 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 0.75 current/1 encoder stream vs NBIS: identical (201447 bytes)
+noise_1600x1500 0.75 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 0.75 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 0.75 current/4 encoder stream vs NBIS: identical (201447 bytes)
+noise_1600x1500 0.75 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 0.75 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 0.75 released/1 encoder stream vs NBIS: identical (201447 bytes)
+noise_1600x1500 0.75 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 0.75 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 0.75 released/4 encoder stream vs NBIS: identical (201447 bytes)
+noise_1600x1500 0.75 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 0.75 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 2.25 current/1 encoder stream vs NBIS: identical (635548 bytes)
+noise_1600x1500 2.25 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 2.25 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 2.25 current/4 encoder stream vs NBIS: identical (635548 bytes)
+noise_1600x1500 2.25 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 2.25 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 2.25 released/1 encoder stream vs NBIS: identical (635548 bytes)
+noise_1600x1500 2.25 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 2.25 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+noise_1600x1500 2.25 released/4 encoder stream vs NBIS: identical (635548 bytes)
+noise_1600x1500 2.25 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+noise_1600x1500 2.25 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 0.75 current/1 encoder stream vs NBIS: identical (3932440 bytes)
+dark_ridges_5500x8000 0.75 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 0.75 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 0.75 current/4 encoder stream vs NBIS: identical (3932440 bytes)
+dark_ridges_5500x8000 0.75 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 0.75 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 0.75 released/1 encoder stream vs NBIS: identical (3932440 bytes)
+dark_ridges_5500x8000 0.75 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 0.75 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 0.75 released/4 encoder stream vs NBIS: identical (3932440 bytes)
+dark_ridges_5500x8000 0.75 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 0.75 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 2.25 current/1 encoder stream vs NBIS: identical (12518245 bytes)
+dark_ridges_5500x8000 2.25 current/1 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 2.25 current/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 2.25 current/4 encoder stream vs NBIS: identical (12518245 bytes)
+dark_ridges_5500x8000 2.25 current/4 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 2.25 current/4 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 2.25 released/1 encoder stream vs NBIS: identical (12518245 bytes)
+dark_ridges_5500x8000 2.25 released/1 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 2.25 released/1 NBIS pixels from the crate's stream vs NBIS's own: identical
+dark_ridges_5500x8000 2.25 released/4 encoder stream vs NBIS: identical (12518245 bytes)
+dark_ridges_5500x8000 2.25 released/4 decoder pixels (NBIS stream) vs NBIS: identical
+dark_ridges_5500x8000 2.25 released/4 NBIS pixels from the crate's stream vs NBIS's own: identical

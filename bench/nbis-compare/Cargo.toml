@@ -1,0 +1,26 @@
+# Timing harness for wsq-codec against NBIS 5.0.0 (docs/nbis-comparison.md).
+#
+# Outside the published package (`include` in the root manifest) and outside the workspace on
+# purpose: it builds on its own and its lock file is committed. `wsq-codec` is the revision
+# of this checkout; run.sh builds a second copy against the crates.io release pinned in
+# `Cargo.released.lock` to compare the two.
+[package]
+name = "wsq-nbis"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Timing harness for wsq-codec against NBIS 5.0.0"
+license = "MIT"
+
+[dependencies]
+wsq-codec = { path = "../.." }
+
+[workspace]
+
+[profile.release]
+# Cargo's defaults for release, spelled out so that the protocol states them.
+opt-level = 3
+debug = false
+lto = false
+codegen-units = 16
