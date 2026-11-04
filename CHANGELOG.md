@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A structured test (`generated_streams_decode_or_fail_cleanly`) feeds the decoder valid streams
+  with random dimensions, filter banks, quantization tables and coefficients, and copies with a
+  few bytes changed. Four `cargo-fuzz` targets (`decode_with`, `read_info`, `read_quantized` and
+  an encode-decode round trip) live in `fuzz/`, outside the published package, and run in CI
+  through ClusterFuzzLite (see `fuzz/README.md`).
 - The decoder and the encoder allocate their image-sized buffers fallibly (coefficients,
   transformed image, wavelet scratch, output pixels, normalized input, quantized coefficients,
   and the copies `inspect::read_quantized` returns). A refused allocation, or a size beyond the

@@ -32,6 +32,13 @@ fn scaled(out: &mut Vec<u8>, scale: u8, v: u16) {
     out.extend_from_slice(&v.to_be_bytes());
 }
 
+/// A valid stream of random dimensions from 1 to 48.
+pub(crate) fn random_stream(r: &mut Rng) -> Vec<u8> {
+    let w = r.range(1, 48) as u16;
+    let h = r.range(1, 48) as u16;
+    stream(r, w, h, false)
+}
+
 /// A valid stream declaring `width` by `height` pixels in which every
 /// quantizer bin is zero, so that it carries no coefficient. A flat image
 /// legitimately produces such a stream, whatever its size.
@@ -135,10 +142,88 @@ fn stream(r: &mut Rng, w: u16, h: u16, empty: bool) -> Vec<u8> {
     out
 }
 
+/// Replaces 1 to 3 random bytes of `data`.
+pub(crate) fn mutate(r: &mut Rng, data: &mut [u8]) {
+    for _ in 0..r.range(1, 3) {
+        let at = r.below(data.len() as u64) as usize;
+        data[at] = r.next() as u8;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DecodeOptions, decode_with, inspect};
+    use crate::{DecodeOptions, decode_with, inspect, read_info};
+
+    /// Valid streams of random shapes, and copies with a few bytes changed,
+    /// reach the wavelet and quantization code with odd dimensions and
+    /// every filter length. Nothing may panic, whatever the build.
+    #[test]
+    fn generated_streams_decode_or_fail_cleanly() {
+        let options = DecodeOptions::default();
+        let mut r = Rng(0x9E37_79B9_7F4A_7C15);
+        let mut decoded = 0;
+        for _ in 0..ITERATIONS {
+            let valid = random_stream(&mut r);
+            let mut corrupt = valid.clone();
+            mutate(&mut r, &mut corrupt);
+            for (i, data) in [valid, corrupt].iter().enumerate() {
+                let result = decode_with(data, &options);
+                if let Ok(image) = &result {
+                    assert_eq!(image.pixels.len(), image.width * image.height);
+                    decoded += usize::from(i == 0);
+                }
+                let _ = read_info(data);
+                let _ = inspect::read_quantized(data, &options);
+            }
+        }
+        // The generator must reach the decoder's last stage.
+        assert!(decoded > ITERATIONS / 2, "{decoded} of {ITERATIONS}");
+    }
+
+    #[cfg(not(debug_assertions))]
+    const ITERATIONS: usize = 4000;
+    #[cfg(debug_assertions)]
+    const ITERATIONS: usize = 600;
+
+    /// Writes the seeds of the `fuzz` targets into `$WSQ_SEED_DIR`: a few
+    /// generated streams and a tiny encoder output for the stream targets,
+    /// in `streams/`, and two inputs for `roundtrip`, in `roundtrip/`.
+    ///
+    /// `WSQ_SEED_DIR=fuzz/seeds cargo test --lib write_fuzz_seeds -- --ignored`
+    #[test]
+    #[ignore = "writes files; run by hand to regenerate fuzz/seeds"]
+    fn write_fuzz_seeds() {
+        let dir = std::path::PathBuf::from(std::env::var_os("WSQ_SEED_DIR").unwrap());
+        let (streams, roundtrip) = (dir.join("streams"), dir.join("roundtrip"));
+        std::fs::create_dir_all(&streams).unwrap();
+        std::fs::create_dir_all(&roundtrip).unwrap();
+        let mut r = Rng(0xC0FF_EE00_1234_5678);
+        let mut seeds = Vec::new();
+        // Fixed shapes: 1 pixel, narrow, odd, and one that is mutated.
+        for (w, h) in [(1, 1), (7, 40), (33, 21)] {
+            seeds.push(stream(&mut r, w, h, false));
+        }
+        let mut mutated = random_stream(&mut r);
+        mutate(&mut r, &mut mutated);
+        seeds.push(mutated);
+        // A real encoder output, from integer-only pixels.
+        let pixels: Vec<u8> = (0..81 * 81)
+            .map(|i| (((i % 81) * 5 + (i / 81) * 3) % 251) as u8)
+            .collect();
+        let encoded = crate::encode(&pixels, 81, 81, &crate::EncodeOptions::default()).unwrap();
+        seeds.push(encoded);
+        for (i, seed) in seeds.iter().enumerate() {
+            std::fs::write(streams.join(format!("seed{i}.wsq")), seed).unwrap();
+        }
+        // Width 81 + 0, height 81 + 0, bit rate 0.02 + 24 / 32, 500 ppi, 1 thread.
+        std::fs::write(
+            roundtrip.join("seed0"),
+            [0, 0, 0, 0, 24, 1, 1, 10, 200, 30, 255],
+        )
+        .unwrap();
+        std::fs::write(roundtrip.join("seed1"), [0, 9, 0, 3, 64, 0, 2, 0]).unwrap();
+    }
 
     /// A stream without coefficients is a flat image, however large it
     /// declares itself.
