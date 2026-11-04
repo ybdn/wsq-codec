@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- `wsq cert compare` judges each stream and each reconstruction by the accuracy requirements of
+  IAFIS-IC-0110 v3.1, Annex AA (file size within 0.4%, bin widths within 0.051%, 99.99% of the
+  bin indices identical and none off by more than 1; for decoders, 99.9% of the pixels identical
+  and none off by more than 1), prints `PASS` or `FAIL` with the clause next to the numbers it
+  already gave, and ends with a summary. It exits with status 3 when a requirement fails (2 stays
+  for a reference file without a readable counterpart). The limits are in
+  `examples/wsq/accuracy.rs`, with unit tests on each side of every limit; the points the
+  specification leaves open are listed in `docs/certification.md` as questions for NIST.
+- The platform-independence claim is worded as determinism, not exact rounding, and scoped to
+  targets with IEEE 754 `f64` (not x87-only ones such as `i586`). `docs/certification.md` cites
+  the CI runs that show the benchmark's stream hashes on Linux, macOS and Windows, and says what
+  has not been verified.
+- `tests/nbis.rs` compares the encoder with NBIS 5.0.0 on large images without committing any
+  stream: the length and the FNV-1a hash of NBIS's stream and of its decode, at 0.75 and 2.25
+  bits per pixel, for 800x750 and 1600x1500 images (ridges, rings, noise) in the default tests
+  and a 5500x8000 image in an `#[ignore]`d test (`cargo test --release --test nbis --
+  --ignored`). Measured against NBIS's own `cwsq` and `dwsq`, built with `-ffp-contract=off`:
+  all ten streams are identical to the byte (zero differing bytes) and decode to the same
+  pixels. `tests/data/README.md` has the procedure and `make_large_references.py` the
+  generator. NBIS cannot encode a 5500x8000 image whose mean is above 97.6 (its pixel sum
+  overflows 32 bits); this crate can, and the README lists it among the differences.
 - `wsq cert encode` no longer runs the `rustc` found on the `PATH` for `submission.txt`: the
   compiler is the one given with `--compiler "$(rustc -vV)"`, or a line to fill in.
 - CI also runs on pushes to `develop`. Releases are published by a workflow triggered by a `v*`

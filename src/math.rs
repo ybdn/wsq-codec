@@ -1,4 +1,4 @@
-//! Natural logarithm and power, the same on every platform.
+//! Natural logarithm and power, the same on every IEEE 754 binary64 target.
 //!
 //! The bit allocation takes logarithms and powers, and its results decide
 //! the bin widths written to the stream, so they must not depend on the
@@ -10,7 +10,8 @@
 //! and round to the nearest `f64`. They use nothing but IEEE 754 addition,
 //! subtraction, multiplication and division, which round exactly the same
 //! way everywhere (Rust never fuses a multiplication and an addition
-//! unless asked), so their results are identical on every target. With 50
+//! unless asked), so their results are identical on every target that computes
+//! `f64` in IEEE 754 binary64 (not on the x87 unit, such as `i586`). With 50
 //! bits to spare, the rounding is the correct one except for inputs whose
 //! exact result lies within about 2^-100 of the midpoint between two
 //! `f64`s; glibc, whose `log` and `pow` stay within 0.52 units in the last

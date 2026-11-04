@@ -1,5 +1,9 @@
 //! Compares against fixtures written by the NIST reference implementation
 //! (see tests/data/README.md).
+//!
+//! Large images have no committed stream: their reference is the length and
+//! the FNV-1a hash of NBIS's stream and of NBIS's decode, and the test makes
+//! the image again.
 
 use wsq_codec::{EncodeOptions, decode, encode, read_info};
 
@@ -22,6 +26,17 @@ fn pattern(kind: &str, w: usize, h: usize, seed: u32) -> Vec<u8> {
                     30 + t.abs_diff(16) as u32 * 12 + (rand() & 15)
                 }
                 "noise" => rand(),
+                "ridges" | "dark_ridges" => {
+                    // "dark_ridges" has a mean of about 75 instead of 143, for the images
+                    // NBIS refuses when bright (see tests/data/README.md).
+                    let (base, gain) = if kind == "ridges" { (40, 6) } else { (20, 3) };
+                    // Triangle wave of the given period (a multiple of 2).
+                    let triangle = |p: usize, period: usize| (p % period).abs_diff(period / 2);
+                    let (cx, cy) = (w / 2, h * 6 / 10);
+                    let (dx, dy) = (x.abs_diff(cx) as u64, y.abs_diff(cy) as u64);
+                    let phase = (dx * dx + dy * dy).isqrt() as usize / 3 + 4 * triangle(x / 5, 16);
+                    base + gain * triangle(phase, 64) as u32 + (rand() >> 4)
+                }
                 _ => (if (x / 7 + y / 5) % 2 == 1 { 200 } else { 40 }) + (rand() & 7),
             };
             out.push(v as u8);
@@ -173,4 +188,164 @@ fn reads_the_reference_comment() {
         "{comment}"
     );
     assert!(comment.ends_with("\nWSQ_BITRATE 0.750000"), "{comment}");
+}
+
+/// Reference for one bit rate of a large image, from NBIS 5.0.0.
+struct LargeRun {
+    bitrate: f32,
+    /// Length of NBIS's stream.
+    len: usize,
+    /// Hash of NBIS's stream.
+    stream: u64,
+    /// Hash of the pixels NBIS decodes from its stream.
+    decoded: u64,
+}
+
+struct Large {
+    kind: &'static str,
+    width: usize,
+    height: usize,
+    runs: &'static [LargeRun],
+}
+
+/// References made by
+/// `tests/data/make_large_references.py`, which also lists the images.
+const LARGE: &[Large] = &[
+    Large {
+        kind: "ridges",
+        width: 800,
+        height: 750,
+        runs: &[
+            LargeRun {
+                bitrate: 0.75,
+                len: 56_089,
+                stream: 0x75e8_bccc_2958_f2ac,
+                decoded: 0x8a36_ce97_e760_4ab0,
+            },
+            LargeRun {
+                bitrate: 2.25,
+                len: 184_038,
+                stream: 0x2934_d838_1fdc_c548,
+                decoded: 0x25d6_e066_c937_fd98,
+            },
+        ],
+    },
+    Large {
+        kind: "ridges",
+        width: 1600,
+        height: 1500,
+        runs: &[
+            LargeRun {
+                bitrate: 0.75,
+                len: 220_487,
+                stream: 0x8b14_c9b7_3a36_2dcd,
+                decoded: 0x57ab_cdb7_1915_34b8,
+            },
+            LargeRun {
+                bitrate: 2.25,
+                len: 733_681,
+                stream: 0x56a6_d9b8_a071_d59f,
+                decoded: 0x7049_e299_f962_fb7a,
+            },
+        ],
+    },
+    Large {
+        kind: "rings",
+        width: 800,
+        height: 750,
+        runs: &[
+            LargeRun {
+                bitrate: 0.75,
+                len: 21_599,
+                stream: 0x9a90_6b29_65c8_48e3,
+                decoded: 0x4a0a_4e85_5842_1234,
+            },
+            LargeRun {
+                bitrate: 2.25,
+                len: 73_641,
+                stream: 0xaeae_48d2_7ab6_95e9,
+                decoded: 0x118d_067d_249c_838d,
+            },
+        ],
+    },
+    Large {
+        kind: "noise",
+        width: 1600,
+        height: 1500,
+        runs: &[
+            LargeRun {
+                bitrate: 0.75,
+                len: 201_447,
+                stream: 0x04ce_ebf9_f8b3_02ba,
+                decoded: 0xc2bd_700d_8ed0_5269,
+            },
+            LargeRun {
+                bitrate: 2.25,
+                len: 635_548,
+                stream: 0x2d5a_7593_3c6b_70cb,
+                decoded: 0x7c8a_23c3_c487_69e4,
+            },
+        ],
+    },
+];
+
+/// Encodes the image of each entry at each of its bit rates (500 ppi, as the
+/// references were made) and compares length, stream hash and decoded hash
+/// with NBIS's.
+fn check_large(images: &[Large]) {
+    for image in images {
+        let (w, h) = (image.width, image.height);
+        let pixels = pattern(image.kind, w, h, (w * h) as u32);
+        for run in image.runs {
+            let name = format!("{} {w}x{h} at {}", image.kind, run.bitrate);
+            let options = EncodeOptions::default()
+                .with_bitrate(run.bitrate)
+                .with_ppi(Some(500));
+            let wsq = encode(&pixels, w, h, &options).unwrap();
+            assert_eq!(wsq.len(), run.len, "{name}: stream length differs");
+            assert_eq!(fnv1a(&wsq), run.stream, "{name}: encoded bytes differ");
+            let decoded = decode(&wsq).unwrap();
+            assert_eq!((decoded.width, decoded.height), (w, h), "{name}");
+            assert_eq!(
+                fnv1a(&decoded.pixels),
+                run.decoded,
+                "{name}: decoded pixels differ"
+            );
+        }
+    }
+}
+
+#[test]
+fn encodes_large_images_like_the_reference() {
+    check_large(LARGE);
+}
+
+/// The 5500x8000 print of 1000 ppi palm size, too slow for a debug build:
+/// `cargo test --release --test nbis -- --ignored`. About 44 million
+/// pixels at 1 s per encode in release. Dark, because NBIS stops when the
+/// sum of the pixel values overflows 32 bits (tests/data/README.md).
+const HUGE: &[Large] = &[Large {
+    kind: "dark_ridges",
+    width: 5500,
+    height: 8000,
+    runs: &[
+        LargeRun {
+            bitrate: 0.75,
+            len: 3_932_440,
+            stream: 0x086f_15c6_e188_ef88,
+            decoded: 0xbe7f_4906_ecbb_e36e,
+        },
+        LargeRun {
+            bitrate: 2.25,
+            len: 12_518_245,
+            stream: 0x986e_6cfe_50d6_9e33,
+            decoded: 0x1887_2de8_672c_4dcd,
+        },
+    ],
+}];
+
+#[test]
+#[ignore = "slow: run with --release -- --ignored"]
+fn encodes_huge_images_like_the_reference() {
+    check_large(HUGE);
 }
