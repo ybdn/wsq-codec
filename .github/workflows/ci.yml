@@ -32,6 +32,17 @@ jobs:
       - run: cargo test --all-targets --features image
       - run: cargo test --doc --features image
 
+  wasm:
+    name: build (wasm32-unknown-unknown)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo build --target wasm32-unknown-unknown
+      - run: cargo build --target wasm32-unknown-unknown --features image
+
   lint:
     runs-on: ubuntu-latest
     steps:

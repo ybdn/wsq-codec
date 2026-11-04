@@ -257,11 +257,11 @@ pub(crate) fn quantize(
     std::thread::scope(|scope| {
         let handles: Vec<_> = runs
             .iter()
-            .map(|subbands| scope.spawn(|| run(subbands)))
+            .map(|subbands| par::spawn(scope, || run(subbands)))
             .collect();
         let mut out = Vec::with_capacity(total);
         for handle in handles {
-            out.extend(handle.join().expect("quantization does not panic"));
+            out.extend(handle.join());
         }
         out
     })

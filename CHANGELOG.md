@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A thread that cannot be created (no thread support on the target, thread limits) no longer
+  panics: that share of the work runs on the calling thread, and the output is unchanged.
 - The encoder computes the logarithms and powers of its bit allocation itself, correctly
   rounded, instead of calling the platform's math library: its output is now the same on every
   platform. It is unchanged wherever glibc rounded correctly, which covers the NBIS fixtures.
