@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- An experimental encoder that hits the requested bit rate, `wsq_codec::experimental::encode_at_rate`
+  (hidden from the documentation, outside semantic versioning, a prototype ahead of the encoding
+  profiles of #44): the specification's bin widths, all scaled by one factor searched on the
+  length of the whole stream, which ends at most 0.5% below the requested size. Its streams keep
+  the conformant layout, carry implementation number 0 and are not conformant. The conformant
+  encoder is unchanged (`tests/nbis.rs`, `benches/hashes.txt`). `cargo bench --bench quality --
+  --optimized` measures it against the conformant encoder at equal size and, with `--nbis`, has
+  NBIS's `dwsq` decode its streams. `docs/quality.md` has the first figures, of 4 November 2026:
+  on the 20 measurements the actual rate is 0.02% to 0.43% below the requested one, PSNR and SSIM
+  at equal size are those of the conformant encoder, and `dwsq` gives the same pixels as this
+  crate. (#42)
 - With several threads, dequantization and the encoder's subband variances run in parallel; the
   largest-magnitude scan that bounds the bin widths shares the variance pass. Output unchanged.
 - The wavelet transform starts its threads once per image instead of once per filtering pass,

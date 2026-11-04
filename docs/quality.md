@@ -75,6 +75,84 @@ requested):
 | 1 | 5 | 0.8795 | -12.0% | 24.49 | 0.8590 |
 | 2.25 | 5 | 2.0766 | -7.7% | 28.11 | 0.9151 |
 
+## Experimental encoder that hits the rate (#42)
+
+`wsq_codec::experimental::encode_at_rate`, a prototype for phase 3 of #17, hidden from the
+documentation and outside semantic versioning. It keeps the conformant stream layout and tables
+and changes only the quantizer bin widths: those of the specification's bit allocation, all
+multiplied by one factor that a search chooses on the length of the whole stream. It stops on the
+first stream at most 0.5% below the target size (target: requested bpp × pixels / 8 bytes) and
+never returns one above it while one fits. Its streams carry implementation number 0. They are
+not what NBIS writes for the requested rate, so they are never conformant.
+
+### Conditions
+
+| | |
+|---|---|
+| Date | 2026-11-04 |
+| Revision | `feat/encodeur-optimise` at `a0d1c57`, on top of `origin/develop` at `673eab3` |
+| Machine | as above, with other jobs running (load average 2.5 to 3.5 on 4 vCPUs) |
+| NBIS | `dwsq` as above |
+| Command | `cargo bench --bench quality -- --large --optimized --nbis /path/to/nbis/bin` |
+
+The images and the rates are those of the tables above, one thread, fastest of three runs.
+"Equal size" is the conformant encoder at the requested rate, found by bisection, whose stream is
+closest in length to the experimental one; its PSNR and SSIM are those of that stream. The last
+column compares NBIS's `dwsq` reconstruction of the experimental stream with this crate's.
+
+### Per image and bit rate
+
+| image | requested bpp | bytes | actual bpp | deviation | PSNR dB | SSIM | equal size: requested bpp | its bytes | its PSNR dB | its SSIM | NBIS `dwsq` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ridges 800×750 | 0.5 | 37410 | 0.4988 | -0.24% | 34.11 | 0.9319 | 0.4727 | 37408 | 34.11 | 0.9319 | same pixels |
+| ridges 800×750 | 0.75 | 56126 | 0.7483 | -0.22% | 34.69 | 0.9415 | 0.7501 | 56125 | 34.69 | 0.9415 | same pixels |
+| ridges 800×750 | 1.0 | 74726 | 0.9963 | -0.37% | 35.24 | 0.9490 | 0.9599 | 74727 | 35.24 | 0.9490 | same pixels |
+| ridges 800×750 | 2.25 | 168713 | 2.2495 | -0.02% | 38.93 | 0.9781 | 2.0477 | 168713 | 38.93 | 0.9781 | same pixels |
+| rings 800×750 | 0.5 | 37384 | 0.4985 | -0.31% | 18.29 | 0.7682 | 1.4225 | 37384 | 18.29 | 0.7682 | same pixels |
+| rings 800×750 | 0.75 | 56123 | 0.7483 | -0.23% | 18.63 | 0.7813 | 1.9027 | 56122 | 18.63 | 0.7813 | same pixels |
+| rings 800×750 | 1.0 | 74884 | 0.9985 | -0.15% | 18.81 | 0.7873 | 2.2734 | 74884 | 18.81 | 0.7873 | same pixels |
+| rings 800×750 | 2.25 | 168358 | 2.2448 | -0.23% | 19.08 | 0.7965 | 3.4021 | 168364 | 19.08 | 0.7965 | same pixels |
+| noise 800×750 | 0.5 | 37420 | 0.4989 | -0.21% | 11.64 | 0.4998 | 0.5981 | 37420 | 11.64 | 0.4997 | same pixels |
+| noise 800×750 | 0.75 | 56110 | 0.7481 | -0.25% | 12.39 | 0.6133 | 0.8063 | 56107 | 12.39 | 0.6134 | same pixels |
+| noise 800×750 | 1.0 | 74757 | 0.9968 | -0.32% | 13.28 | 0.6958 | 1.0271 | 74757 | 13.28 | 0.6957 | same pixels |
+| noise 800×750 | 2.25 | 168582 | 2.2478 | -0.10% | 16.37 | 0.8428 | 2.3732 | 168583 | 16.37 | 0.8428 | same pixels |
+| checker 320×288 | 0.5 | 5740 | 0.4983 | -0.35% | 18.49 | 0.9252 | 0.5900 | 5740 | 18.49 | 0.9252 | same pixels |
+| checker 320×288 | 0.75 | 8630 | 0.7491 | -0.12% | 19.72 | 0.9445 | 0.8250 | 8630 | 19.72 | 0.9445 | same pixels |
+| checker 320×288 | 1.0 | 11512 | 0.9993 | -0.07% | 20.78 | 0.9580 | 1.0035 | 11512 | 20.78 | 0.9580 | same pixels |
+| checker 320×288 | 2.25 | 25818 | 2.2411 | -0.39% | 26.05 | 0.9873 | 2.0918 | 25818 | 26.05 | 0.9873 | same pixels |
+| ridges 1600×1500 | 0.5 | 149635 | 0.4988 | -0.24% | 34.14 | 0.9319 | 0.4878 | 149636 | 34.14 | 0.9319 | same pixels |
+| ridges 1600×1500 | 0.75 | 224504 | 0.7483 | -0.22% | 34.71 | 0.9412 | 0.7607 | 224506 | 34.71 | 0.9413 | same pixels |
+| ridges 1600×1500 | 1.0 | 299365 | 0.9979 | -0.21% | 35.27 | 0.9490 | 0.9695 | 299368 | 35.27 | 0.9490 | same pixels |
+| ridges 1600×1500 | 2.25 | 672086 | 2.2403 | -0.43% | 38.94 | 0.9779 | 2.0496 | 672091 | 38.94 | 0.9779 | same pixels |
+
+### Mean per requested bit rate
+
+| target bpp | images | mean actual bpp | deviation, min / max | mean PSNR dB | mean PSNR difference at equal size, dB | mean SSIM difference | encoding time / conformant |
+|---|---|---|---|---|---|---|---|
+| 0.5 | 5 | 0.4986 | -0.35% / -0.21% | 23.33 | -0.000 | +0.0000 | 1.85 |
+| 0.75 | 5 | 0.7485 | -0.25% / -0.12% | 24.03 | -0.000 | -0.0000 | 2.47 |
+| 1 | 5 | 0.9977 | -0.37% / -0.07% | 24.67 | +0.000 | +0.0000 | 1.76 |
+| 2.25 | 5 | 2.2447 | -0.43% / -0.02% | 27.87 | +0.000 | +0.0000 | 3.02 |
+
+The time ratio is the sum of the experimental encoding times over the sum of the conformant ones
+at the same requested rate, on a loaded machine: it says the order of magnitude of the cost of the
+search (one quantization and one Huffman coding per stream tried), not a figure to quote.
+
+### What these figures say, and what they do not
+
+- On these 20 measurements the actual rate is between 0.43% and 0.02% below the requested one;
+  the conformant encoder is 7.7% to 16.8% below on average (table above), and up to 65% below on
+  `rings`. The stated margin of the prototype is therefore 0.5% below the target, none above.
+- At equal size (streams within 6 bytes of each other), PSNR is the same as the conformant
+  encoder's to the 0.01 dB printed, and SSIM within 0.0001. This follows from the code rather than from the
+  images: the conformant bit allocation already gives every subband its width divided by one
+  constant that depends on the requested rate (`src/quant.rs`, `bin_widths`), so scaling all the
+  widths by one factor stays within the family of conformant encodings at other requested rates.
+  The gain is in hitting the size, not in quality at a given size.
+- NBIS's `dwsq` decodes the 20 experimental streams to the same pixels as this crate. JNBIS was
+  not run for this table.
+- The images are synthetic patterns, not fingerprints; one machine, under load.
+
 ## Reproducing
 
 ```sh
@@ -85,7 +163,11 @@ cargo bench --bench quality -- --large --nbis /path/to/nbis/bin --csv quality.cs
 Streams written earlier by NBIS, on another machine for instance, are compared with
 `--nbis-streams DIR` (files `IMAGE_RATE.wsq`); `--export DIR` writes the images as PGM for
 that. `WSQ_QUALITY_DIR` names a local directory of 8-bit PGM files to measure as well; it stays
-outside the repository, and no real fingerprint is ever committed. The optimized encoder of
-phase 3 of #17 is to be measured with the same command and compared with this table.
+outside the repository, and no real fingerprint is ever committed. `--optimized` adds the
+experimental encoder of #42 and the conformant encoder at equal size:
+
+```sh
+cargo bench --bench quality -- --large --optimized --nbis /path/to/nbis/bin --csv quality.csv
+```
 
 Speed and memory against NBIS are in [nbis-comparison.md](nbis-comparison.md).
