@@ -297,28 +297,14 @@ impl QuantTable {
     }
 }
 
-/// Turns quantized coefficients back into a transformed image. `coeffs`
+/// Turns quantized coefficients back into a transformed image, written
+/// into `data` whatever it holds, on up to `threads` threads. `coeffs`
 /// holds [`QuantTable::coefficient_count`] coefficients; missing ones
 /// count as zero.
-pub(crate) fn unquantize(
-    coeffs: &[i16],
-    table: &QuantTable,
-    width: usize,
-    height: usize,
-    q_tree: &[QNode; Q_TREE_LEN],
-    threads: usize,
-) -> Vec<f32> {
-    let mut data = vec![0.0f32; width * height];
-    unquantize_into(coeffs, table, width, q_tree, &mut data, threads);
-    data
-}
-
-/// [`unquantize`] into `data`, which holds `width * height` samples and
-/// is overwritten whatever it holds, on up to `threads` threads.
 ///
 /// Each sample depends on its own coefficient only, so the image is cut
 /// into bands of rows, one per thread, each filled row by row.
-pub(crate) fn unquantize_into(
+pub(crate) fn unquantize(
     coeffs: &[i16],
     table: &QuantTable,
     width: usize,

@@ -13,7 +13,8 @@ pub(crate) const MIN_DIMENSION: usize = 81;
 /// Converts pixels to floats centered on zero and scaled to about
 /// +/-128, on up to `threads` threads. Returns the shift and scale that
 /// undo it.
-fn normalize(pixels: &[u8], threads: usize) -> (Vec<f32>, f32, f32) {
+/// `data` receives the floats.
+fn normalize(pixels: &[u8], data: &mut [f32], threads: usize) -> (f32, f32) {
     // A histogram gives the sum, the minimum and the maximum in one pass.
     let mut counts = [0u64; 256];
     for &p in pixels {
@@ -35,13 +36,12 @@ fn normalize(pixels: &[u8], threads: usize) -> (Vec<f32>, f32, f32) {
         // A flat image: every coefficient is zero whatever the scale.
         r_scale = 1.0;
     }
-    let mut data = vec![0.0f32; pixels.len()];
-    par::zip_chunks(pixels, &mut data, threads, |pixels, data| {
+    par::zip_chunks(pixels, data, threads, |pixels, data| {
         for (d, &p) in data.iter_mut().zip(pixels) {
             *d = (f32::from(p) - m_shift) / r_scale;
         }
     });
-    (data, m_shift, r_scale)
+    (m_shift, r_scale)
 }
 
 pub(crate) fn encode(
@@ -49,6 +49,7 @@ pub(crate) fn encode(
     width: usize,
     height: usize,
     options: &EncodeOptions,
+    scratch: &mut wavelet::Scratch,
 ) -> Result<Vec<u8>, EncodeError> {
     let range = MIN_DIMENSION..=usize::from(u16::MAX);
     if !range.contains(&width) || !range.contains(&height) {
@@ -69,15 +70,18 @@ pub(crate) fn encode(
     }
 
     let threads = crate::thread_count(options.threads);
-    let (mut data, m_shift, r_scale) = normalize(pixels, threads);
+    let data = wavelet::buffer(&mut scratch.image, pixels.len());
+    let (m_shift, r_scale) = normalize(pixels, data, threads);
     let trees = Trees::new(width, height);
-    wavelet::decompose(&mut data, width, &trees.w, threads);
+    let tmp = wavelet::buffer(&mut scratch.tmp, pixels.len());
+    wavelet::decompose(data, tmp, width, &trees.w, threads);
+    wavelet::release(&mut scratch.tmp, scratch.keep);
 
-    let stats = quant::variances(&data, width, &trees.q, threads);
+    let stats = quant::variances(data, width, &trees.q, threads);
     let mut params = quant::bin_widths(&stats.var, bitrate);
     quant::limit_bin_widths(&mut params, &stats);
-    let coeffs = quant::quantize(&data, width, &trees.q, &params, threads);
-    drop(data);
+    let coeffs = quant::quantize(data, width, &trees.q, &params, threads);
+    wavelet::release(&mut scratch.image, scratch.keep);
 
     // The coefficients of each block, in subband order.
     let block_len = |subbands: std::ops::Range<usize>| -> usize {

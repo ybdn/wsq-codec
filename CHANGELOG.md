@@ -9,6 +9,9 @@
 - With several threads, the decoder finds the Huffman blocks by their markers and decodes them
   side by side. A stream that fails on that path is read again on one thread, so errors are
   unchanged.
+- `decode_into` decodes into a buffer the caller provides, and `WsqDecoder::read_image` uses it
+  instead of copying the pixels. `Decoder` and `Encoder` keep their working buffers from one
+  image to the next. New `DecodeError::OutputSize` for a buffer of the wrong size.
 - The benchmark images are generated with integer arithmetic only, and `benches/hashes.txt` is
   recorded again from them (checked on Linux x86-64 with 1, 0 and 3 threads). CI runs
   `--check` on Linux, macOS and Windows.

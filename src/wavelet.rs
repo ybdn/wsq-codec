@@ -535,6 +535,56 @@ fn synthesis_plan(n: usize, lo: &[f32], hi: &[f32], inv: bool) -> Plan {
     plan
 }
 
+/// The transformed image and the transform's scratch space, which
+/// [`crate::Decoder`] and [`crate::Encoder`] keep from one image to the
+/// next.
+#[derive(Default)]
+pub(crate) struct Scratch {
+    pub image: Vec<f32>,
+    pub tmp: Vec<f32>,
+    /// Keeps the buffers once an image is done. Without it each buffer is
+    /// freed as soon as it is no longer needed, which keeps the peak
+    /// memory of a single image down.
+    pub keep: bool,
+}
+
+impl Scratch {
+    /// Buffers kept from one image to the next.
+    pub fn kept() -> Self {
+        Scratch {
+            keep: true,
+            ..Scratch::default()
+        }
+    }
+}
+
+/// Frees `buf` unless `keep` is set.
+pub(crate) fn release(buf: &mut Vec<f32>, keep: bool) {
+    if !keep {
+        *buf = Vec::new();
+    }
+}
+
+impl std::fmt::Debug for Scratch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Scratch")
+            .field("samples", &self.image.len())
+            .finish()
+    }
+}
+
+/// The first `n` samples of `buf`, grown to them if needed. Whatever the
+/// samples hold is left there.
+pub(crate) fn buffer(buf: &mut Vec<f32>, n: usize) -> &mut [f32] {
+    if buf.len() < n {
+        // A fresh zeroed allocation costs nothing until it is written,
+        // unlike growing the buffer in place.
+        *buf = Vec::new();
+        *buf = vec![0.0; n];
+    }
+    &mut buf[..n]
+}
+
 /// One filtering pass over a `lenx` by `leny` region: between the region
 /// of the image at (`x`, `y`) and the top left corner of the scratch
 /// buffer, in the direction `to_tmp` gives.
@@ -661,13 +711,15 @@ fn run_share<'a>(
 
 /// Forward transform of the whole image in place, one wavelet tree node
 /// at a time, on up to `threads` threads.
+///
+/// `tmp`, as long as `data`, is scratch space, whatever it holds.
 pub(crate) fn decompose(
     data: &mut [f32],
+    tmp: &mut [f32],
     width: usize,
     tree: &[WNode; W_TREE_LEN],
     threads: usize,
 ) {
-    let mut tmp = vec![0.0f32; data.len()];
     let mut passes = Vec::with_capacity(2 * tree.len());
     for node in tree {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
@@ -684,21 +736,22 @@ pub(crate) fn decompose(
             });
         }
     }
-    run(&passes, data, &mut tmp, width, threads);
+    run(&passes, data, tmp, width, threads);
 }
 
 /// Inverse transform of the whole image in place, on up to `threads`
 /// threads. `lo` and `hi` are the synthesis filters as read from the
-/// transform table.
+/// transform table. `tmp`, as long as `data`, is scratch space, whatever it
+/// holds.
 pub(crate) fn reconstruct(
     data: &mut [f32],
+    tmp: &mut [f32],
     width: usize,
     tree: &[WNode; W_TREE_LEN],
     lo: &[f32],
     hi: &[f32],
     threads: usize,
 ) {
-    let mut tmp = vec![0.0f32; data.len()];
     let mut passes = Vec::with_capacity(2 * tree.len());
     for node in tree.iter().rev() {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
@@ -715,5 +768,5 @@ pub(crate) fn reconstruct(
             });
         }
     }
-    run(&passes, data, &mut tmp, width, threads);
+    run(&passes, data, tmp, width, threads);
 }

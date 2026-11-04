@@ -313,7 +313,50 @@ fn read_quantized_with(
     }))
 }
 
-pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
+pub(crate) fn decode(
+    data: &[u8],
+    options: &DecodeOptions,
+    scratch: &mut wavelet::Scratch,
+) -> Result<Image, DecodeError> {
+    let quantized = read_quantized(data, options)?;
+    let mut pixels = Vec::new();
+    let info = render(quantized, options, scratch, |n| {
+        pixels = vec![0u8; n];
+        &mut pixels
+    });
+    Ok(Image {
+        width: info.width,
+        height: info.height,
+        ppi: info.ppi,
+        pixels,
+    })
+}
+
+pub(crate) fn decode_into(
+    data: &[u8],
+    options: &DecodeOptions,
+    scratch: &mut wavelet::Scratch,
+    out: &mut [u8],
+) -> Result<Info, DecodeError> {
+    let quantized = read_quantized(data, options)?;
+    let expected = quantized.info.width * quantized.info.height;
+    if out.len() != expected {
+        return Err(DecodeError::OutputSize {
+            expected,
+            actual: out.len(),
+        });
+    }
+    Ok(render(quantized, options, scratch, |_| out))
+}
+
+/// Dequantizes and transforms back, then writes the pixels into the
+/// buffer of `width * height` bytes that `output` gives for that size.
+fn render<'o>(
+    quantized: Quantized,
+    options: &DecodeOptions,
+    scratch: &mut wavelet::Scratch,
+    output: impl FnOnce(usize) -> &'o mut [u8],
+) -> Info {
     let Quantized {
         info,
         frame,
@@ -321,34 +364,34 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
         quant,
         trees,
         coeffs,
-    } = read_quantized(data, options)?;
-    let (width, height) = (info.width, info.height);
+    } = quantized;
+    let width = info.width;
+    let n = width * info.height;
     let threads = crate::thread_count(options.threads);
-    let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q, threads);
+    let data = wavelet::buffer(&mut scratch.image, n);
+    quant::unquantize(&coeffs, &quant, width, &trees.q, data, threads);
     drop(coeffs);
+    let tmp = wavelet::buffer(&mut scratch.tmp, n);
     wavelet::reconstruct(
-        &mut data,
+        data,
+        tmp,
         width,
         &trees.w,
         &transform.lo,
         &transform.hi,
         threads,
     );
+    wavelet::release(&mut scratch.tmp, scratch.keep);
 
-    let mut pixels = vec![0u8; data.len()];
-    par::zip_chunks(&data, &mut pixels, threads, |data, pixels| {
+    par::zip_chunks(data, output(n), threads, |data, pixels| {
         for (p, &v) in pixels.iter_mut().zip(data) {
             let v = (f64::from(v * frame.r_scale + frame.m_shift) + 0.5) as f32;
             // Also maps NaN, from absurd tables, to 0.
             *p = v.clamp(0.0, 255.0) as u8;
         }
     });
-    Ok(Image {
-        width,
-        height,
-        ppi: info.ppi,
-        pixels,
-    })
+    wavelet::release(&mut scratch.image, scratch.keep);
+    info
 }
 
 #[cfg(test)]
