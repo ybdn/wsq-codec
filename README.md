@@ -136,6 +136,10 @@ The encoder departs from NBIS only where NBIS's output is broken:
   specification asks for bins too fine for 16-bit coefficients. NBIS then wraps coefficients
   around or drops every subband, and decodes a flat image. This encoder widens those bins
   just enough for the coefficients to fit.
+- NBIS sums the pixel values in 32 bits and stops with an overflow error when the sum passes
+  2^32 - 1, which for 5500x8000 pixels (44 million) means a mean above 97.6: it cannot encode a
+  bright image of that size (`cwsq` exits with 165). This encoder sums in 64 bits and encodes
+  it, so there is no NBIS output to compare with for such an image.
 
 The decoder rejects streams whose blocks hold fewer coefficients than the subbands need, where
 NBIS would read uninitialized memory.

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `tests/nbis.rs` compares the encoder with NBIS 5.0.0 on large images without committing any
+  stream: the length and the FNV-1a hash of NBIS's stream and of its decode, at 0.75 and 2.25
+  bits per pixel, for 800x750 and 1600x1500 images (ridges, rings, noise) in the default tests
+  and a 5500x8000 image in an `#[ignore]`d test (`cargo test --release --test nbis --
+  --ignored`). Measured against NBIS's own `cwsq` and `dwsq`, built with `-ffp-contract=off`:
+  all ten streams are identical to the byte (zero differing bytes) and decode to the same
+  pixels. `tests/data/README.md` has the procedure and `make_large_references.py` the
+  generator. NBIS cannot encode a 5500x8000 image whose mean is above 97.6 (its pixel sum
+  overflows 32 bits); this crate can, and the README lists it among the differences.
 - `wsq cert encode` no longer runs the `rustc` found on the `PATH` for `submission.txt`: the
   compiler is the one given with `--compiler "$(rustc -vV)"`, or a line to fill in.
 - CI also runs on pushes to `develop`. Releases are published by a workflow triggered by a `v*`
