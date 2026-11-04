@@ -23,7 +23,7 @@ Please include:
 
 **Never send real fingerprints.** They are biometric data, a special category of personal data
 under GDPR article 9. Build the input synthetically, or describe the stream with the output of
-`cargo run --release --example wsq -- info FILE`, which prints the header values and no pixel.
+`wsq info FILE`, which prints the header values and no pixel.
 
 We aim to acknowledge a report within a few days and to publish a fix and an advisory once a
 release is ready. Reporters are credited unless they prefer not to be.

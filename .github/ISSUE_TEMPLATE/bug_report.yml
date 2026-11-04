@@ -7,7 +7,7 @@ body:
       value: |
         **Never attach real fingerprints.** They are biometric data, a special category under
         GDPR article 9. Use a synthetic image, or describe the stream with the output of
-        `cargo run --release --example wsq -- info FILE`.
+        `wsq info FILE`.
 
         A vulnerability (panic, hang or memory exhaustion on a crafted stream) goes through
         the private channel in SECURITY.md, not here.

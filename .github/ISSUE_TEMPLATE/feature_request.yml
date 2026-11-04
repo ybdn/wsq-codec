@@ -7,7 +7,7 @@ body:
       value: |
         **Never attach real fingerprints.** They are biometric data, a special category under
         GDPR article 9. Use synthetic images, or describe the stream with the output of
-        `cargo run --release --example wsq -- info FILE`.
+        `wsq info FILE`.
   - type: textarea
     id: problem
     attributes:

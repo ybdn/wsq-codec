@@ -1,3 +1,6 @@
+[workspace]
+members = ["cli"]
+
 [package]
 name = "wsq-codec"
 version = "0.1.1"
@@ -15,7 +18,6 @@ include = [
     "/src/**",
     "/tests/**",
     "/benches/**",
-    "/examples/**",
     "/docs/**",
     "/README.md",
     "/CHANGELOG.md",
@@ -36,9 +38,3 @@ harness = false
 [[bench]]
 name = "quality"
 harness = false
-
-# The accuracy requirements of `cert compare` have unit tests.
-[[example]]
-name = "wsq"
-path = "examples/wsq/main.rs"
-test = true
