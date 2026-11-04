@@ -118,8 +118,7 @@ impl ImageDecoder for WsqDecoder {
     }
 
     fn read_image(self, buf: &mut [u8]) -> ImageResult<()> {
-        let image = crate::decode_with(&self.data, &self.options).map_err(decoding_error)?;
-        buf.copy_from_slice(&image.pixels);
+        crate::decode_into(&self.data, &self.options, buf).map_err(decoding_error)?;
         Ok(())
     }
 

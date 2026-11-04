@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- With several threads, dequantization and the encoder's subband variances run in parallel; the
+  largest-magnitude scan that bounds the bin widths shares the variance pass. Output unchanged.
+- The wavelet transform starts its threads once per image instead of once per filtering pass,
+  and splits column passes by output rows: several threads no longer slow small images down.
+- With several threads, the decoder finds the Huffman blocks by their markers and decodes them
+  side by side, each block's coefficients growing fallibly. A stream that fails on that path is
+  read again on one thread, so errors are unchanged.
+- The image-sized buffers of the encoder and decoder are held in bands of rows, each allocated
+  fallibly and zeroed by its own thread when several are asked for: the serial zeroing that
+  fallible allocation brought no longer slows multithreaded runs down. Output unchanged.
+- `decode_into` decodes into a buffer the caller provides, and `WsqDecoder::read_image` uses it
+  instead of copying the pixels. `Decoder` and `Encoder` keep their working buffers from one
+  image to the next (the peak memory of `decode` and `encode` is unchanged; a `Decoder` keeps
+  8 bytes per pixel of its largest image). New `DecodeError::OutputSize` for a buffer of the
+  wrong size.
 - A comparison with NBIS 5.0.0 for speed and memory: `bench/nbis-compare` (outside the published
   package and the workspace, with its own lock files) times NBIS's `wsq_encode_mem` and
   `wsq_decode_mem` and this crate in separate processes, one call each, interleaved, with

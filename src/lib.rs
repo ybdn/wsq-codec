@@ -267,7 +267,79 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
 /// [`TooLarge`](DecodeError::TooLarge) if the image has more than
 /// [`max_pixels`](DecodeOptions::max_pixels) pixels.
 pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
-    decode::decode(data, options)
+    decode::decode(data, options, &mut wavelet::Scratch::default())
+}
+
+/// Decodes a WSQ stream into `out`, which must hold exactly one byte per
+/// pixel (see [`read_info`] for the dimensions), and returns what the
+/// stream says about its image.
+///
+/// # Errors
+///
+/// Returns the [`DecodeError`] that [`decode_with`] gives, or
+/// [`OutputSize`](DecodeError::OutputSize) if `out` does not hold `width * height` bytes.
+pub fn decode_into(
+    data: &[u8],
+    options: &DecodeOptions,
+    out: &mut [u8],
+) -> Result<Info, DecodeError> {
+    decode::decode_into(data, options, &mut wavelet::Scratch::default(), out)
+}
+
+/// A decoder that keeps its working buffers from one image to the next.
+///
+/// Decoding needs two buffers of 4 bytes per pixel besides the output.
+/// [`decode_with`] allocates them for every image; a `Decoder` allocates
+/// them once and keeps them, as large as the largest image so far, which
+/// spares a batch of images the cost of allocating and first touching
+/// them again. The output is the same either way. Its peak is then about
+/// 10 bytes per pixel, since the buffers stay while the quantized
+/// coefficients are read, against 8 for [`decode_with`] (see
+/// [`DecodeOptions::max_pixels`]); a refused allocation gives
+/// [`DecodeError::OutOfMemory`] as there.
+///
+/// ```
+/// # let wsq = wsq_codec::encode(&[128; 100 * 100], 100, 100, &Default::default()).unwrap();
+/// let mut decoder = wsq_codec::Decoder::new(wsq_codec::DecodeOptions::default());
+/// let mut pixels = vec![0; 100 * 100];
+/// for stream in [&wsq, &wsq] {
+///     let info = decoder.decode_into(stream, &mut pixels)?;
+///     assert_eq!((info.width, info.height), (100, 100));
+/// }
+/// # Ok::<(), wsq_codec::DecodeError>(())
+/// ```
+#[derive(Debug)]
+pub struct Decoder {
+    options: DecodeOptions,
+    scratch: wavelet::Scratch,
+}
+
+impl Decoder {
+    /// A decoder using `options` for every image.
+    pub fn new(options: DecodeOptions) -> Self {
+        Decoder {
+            options,
+            scratch: wavelet::Scratch::kept(),
+        }
+    }
+
+    /// Decodes a WSQ stream, as [`decode_with`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`DecodeError`] that [`decode_with`] gives.
+    pub fn decode(&mut self, data: &[u8]) -> Result<Image, DecodeError> {
+        decode::decode(data, &self.options, &mut self.scratch)
+    }
+
+    /// Decodes a WSQ stream into `out`, as [`decode_into`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`DecodeError`] that [`decode_into`] gives.
+    pub fn decode_into(&mut self, data: &[u8], out: &mut [u8]) -> Result<Info, DecodeError> {
+        decode::decode_into(data, &self.options, &mut self.scratch, out)
+    }
 }
 
 /// Reads a whole WSQ stream from `reader` and decodes it.
@@ -325,7 +397,58 @@ pub fn encode(
     height: usize,
     options: &EncodeOptions,
 ) -> Result<Vec<u8>, EncodeError> {
-    encode::encode(pixels, width, height, options)
+    encode::encode(
+        pixels,
+        width,
+        height,
+        options,
+        &mut wavelet::Scratch::default(),
+    )
+}
+
+/// An encoder that keeps its working buffers from one image to the next.
+///
+/// Encoding needs two buffers of 4 bytes per pixel besides the stream.
+/// [`encode`] allocates them for every image; an `Encoder` allocates them
+/// once and keeps them, as large as the largest image so far, as a
+/// [`Decoder`] does. The output is the same either way.
+///
+/// ```
+/// let mut encoder = wsq_codec::Encoder::new(wsq_codec::EncodeOptions::default());
+/// for value in [96, 160] {
+///     let wsq = encoder.encode(&[value; 100 * 100], 100, 100)?;
+///     assert_eq!(wsq, wsq_codec::encode(&[value; 100 * 100], 100, 100, &Default::default())?);
+/// }
+/// # Ok::<(), wsq_codec::EncodeError>(())
+/// ```
+#[derive(Debug)]
+pub struct Encoder {
+    options: EncodeOptions,
+    scratch: wavelet::Scratch,
+}
+
+impl Encoder {
+    /// An encoder using `options` for every image.
+    pub fn new(options: EncodeOptions) -> Self {
+        Encoder {
+            options,
+            scratch: wavelet::Scratch::kept(),
+        }
+    }
+
+    /// Encodes an image, as [`encode`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`EncodeError`] that [`encode`] gives.
+    pub fn encode(
+        &mut self,
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+    ) -> Result<Vec<u8>, EncodeError> {
+        encode::encode(pixels, width, height, &self.options, &mut self.scratch)
+    }
 }
 
 /// Encodes an image as [`encode`] does and writes the stream to `writer`.

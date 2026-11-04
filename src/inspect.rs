@@ -72,6 +72,12 @@ pub fn read_quantized(data: &[u8], options: &DecodeOptions) -> Result<Quantized,
         trees,
         coeffs,
     } = decode::read_quantized(data, options)?;
+    let mut all = mem::with_capacity(coeffs.iter().map(Vec::len).sum())?;
+    for run in &coeffs {
+        all.extend_from_slice(run);
+    }
+    drop(coeffs);
+    let coeffs = all;
     let mut rest = coeffs.as_slice();
     let subbands = trees.q[..NUM_SUBBANDS]
         .iter()

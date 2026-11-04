@@ -1,5 +1,6 @@
 use wsq_codec::{
-    DecodeError, DecodeOptions, EncodeError, EncodeOptions, decode, decode_with, encode, read_info,
+    DecodeError, DecodeOptions, Decoder, EncodeError, EncodeOptions, Encoder, decode, decode_into,
+    decode_with, encode, read_info,
 };
 
 /// A fingerprint-like image: curved ridges with some noise.
@@ -250,4 +251,43 @@ fn corrupted_streams_do_not_panic() {
         }
         let _ = read_info(&data);
     }
+}
+
+#[test]
+fn reused_buffers_do_not_change_the_output() {
+    // Larger, then smaller, then larger again, so that the kept buffers
+    // hold samples of an earlier image.
+    let sizes = [(300, 280), (120, 97), (1031, 777), (300, 280)];
+    for threads in [1, 3] {
+        let mut encoder = Encoder::new(EncodeOptions::default().with_threads(threads));
+        let mut decoder = Decoder::new(DecodeOptions::default().with_threads(threads));
+        for (w, h) in sizes {
+            let pixels = ridges(w, h);
+            let wsq = encode(&pixels, w, h, &EncodeOptions::default()).unwrap();
+            assert_eq!(encoder.encode(&pixels, w, h).unwrap(), wsq);
+            let image = decode(&wsq).unwrap();
+            assert_eq!(decoder.decode(&wsq).unwrap(), image);
+            let mut out = vec![0x55; w * h];
+            let info = decoder.decode_into(&wsq, &mut out).unwrap();
+            assert_eq!((info.width, info.height), (w, h));
+            assert_eq!(out, image.pixels);
+            let mut out = vec![0; w * h];
+            decode_into(&wsq, &DecodeOptions::default(), &mut out).unwrap();
+            assert_eq!(out, image.pixels);
+        }
+    }
+}
+
+#[test]
+fn decode_into_checks_the_buffer_size() {
+    let wsq = sample();
+    let info = read_info(&wsq).unwrap();
+    let mut out = vec![0; info.width * info.height + 1];
+    assert_eq!(
+        decode_into(&wsq, &DecodeOptions::default(), &mut out),
+        Err(DecodeError::OutputSize {
+            expected: info.width * info.height,
+            actual: out.len()
+        })
+    );
 }

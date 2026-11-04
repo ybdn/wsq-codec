@@ -34,7 +34,23 @@ where
     F: FnOnce() -> T + Send + 'scope,
     T: Send + 'scope,
 {
-    // A failed spawn drops the closure, so keep it reachable to run it here.
+    match try_spawn(scope, f) {
+        Ok(handle) => Task::Thread(handle),
+        Err(f) => Task::Done(f()),
+    }
+}
+
+/// Runs `f` on a new scoped thread, or gives it back if the thread cannot
+/// be created.
+pub(crate) fn try_spawn<'scope, 'env, T, F>(
+    scope: &'scope Scope<'scope, 'env>,
+    f: F,
+) -> Result<ScopedJoinHandle<'scope, T>, F>
+where
+    F: FnOnce() -> T + Send + 'scope,
+    T: Send + 'scope,
+{
+    // A failed spawn drops the closure, so keep it reachable to give it back.
     let slot = Arc::new(Mutex::new(Some(f)));
     let job = Arc::clone(&slot);
     #[cfg(test)]
@@ -49,13 +65,10 @@ where
             f.expect("job runs once")()
         })
     };
-    match spawned {
-        Ok(handle) => Task::Thread(handle),
-        Err(_) => {
-            let f = slot.lock().ok().and_then(|mut f| f.take());
-            Task::Done(f.expect("a job that did not start is still here")())
-        }
-    }
+    spawned.map_err(|_| {
+        let f = slot.lock().ok().and_then(|mut f| f.take());
+        f.expect("a job that did not start is still here")
+    })
 }
 
 /// Fewest items worth a thread of their own.
@@ -66,27 +79,65 @@ pub(crate) fn parts(threads: usize, items: usize) -> usize {
     threads.min(items / MIN_ITEMS).max(1)
 }
 
-/// Calls `f` on matching chunks of `src` and `dst`, which have the same
-/// length, on up to `threads` threads.
-pub(crate) fn zip_chunks<A: Sync, B: Send>(
-    src: &[A],
-    dst: &mut [B],
+/// Calls `f(first, group)` on consecutive groups of `rows`, `first` being
+/// the index of the group's first row, on up to `threads` threads.
+/// `items`, the work all the rows stand for, decides how many threads are
+/// worth it.
+pub(crate) fn row_groups<R: Send>(
+    rows: &mut [R],
+    items: usize,
     threads: usize,
-    f: impl Fn(&[A], &mut [B]) + Sync,
+    f: impl Fn(usize, &mut [R]) + Sync,
 ) {
-    debug_assert_eq!(src.len(), dst.len());
-    let parts = parts(threads, src.len());
+    let parts = parts(threads, items);
     if parts == 1 {
-        return f(src, dst);
+        return f(0, rows);
     }
-    let size = src.len().div_ceil(parts);
+    let size = rows.len().div_ceil(parts).max(1);
     let f = &f;
     std::thread::scope(|scope| {
-        for (src, dst) in src.chunks(size).zip(dst.chunks_mut(size)) {
-            // Dropping the task is fine: the scope joins it.
-            drop(spawn(scope, move || f(src, dst)));
+        for (i, group) in rows.chunks_mut(size).enumerate() {
+            drop(spawn(scope, move || f(i * size, group)));
         }
     });
+}
+
+/// Returns `f(i)` for every `i` in `order`, a permutation of `0..n`, on
+/// up to `parts` threads, as a vector indexed by `i`. The threads take the
+/// items one at a time in the given order, so listing the largest first
+/// balances uneven items. Each result depends on its item only, so the
+/// output does not depend on the threads.
+pub(crate) fn map_dynamic<R: Send>(
+    order: &[usize],
+    parts: usize,
+    f: impl Fn(usize) -> R + Sync,
+) -> Vec<R> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let worker = || {
+        let mut done = Vec::new();
+        loop {
+            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(&i) = order.get(k) else { break };
+            done.push((i, f(i)));
+        }
+        done
+    };
+    let mut out: Vec<Option<R>> = order.iter().map(|_| None).collect();
+    std::thread::scope(|scope| {
+        let tasks: Vec<_> = (1..parts).map(|_| spawn(scope, worker)).collect();
+        let mut merge = |done: Vec<(usize, R)>| {
+            for (i, r) in done {
+                out[i] = Some(r);
+            }
+        };
+        merge(worker());
+        for task in tasks {
+            merge(task.join());
+        }
+    });
+    out.into_iter()
+        .map(|r| r.expect("every item is mapped"))
+        .collect()
 }
 
 /// Runs three independent jobs, on three threads when `parallel` is set,
@@ -133,13 +184,25 @@ mod tests {
     }
 
     #[test]
-    fn run3_and_zip_chunks_survive_refused_threads() {
+    fn helpers_survive_refused_threads() {
         assert_eq!(without_threads(|| run3(true, || 1, || 2, || 3)), (1, 2, 3));
+        let order = [2, 0, 3, 1];
+        let squares = [0, 1, 4, 9];
+        assert_eq!(map_dynamic(&order, 3, |i| i * i), squares);
+        assert_eq!(
+            without_threads(|| map_dynamic(&order, 3, |i| i * i)),
+            squares
+        );
         let src: Vec<u32> = (0..MIN_ITEMS as u32 * 3).collect();
         let mut dst = vec![0; src.len()];
         without_threads(|| {
-            zip_chunks(&src, &mut dst, 4, |s, d| {
-                d.iter_mut().zip(s).for_each(|(d, s)| *d = s + 1)
+            let mut rows: Vec<&mut [u32]> = dst.chunks_mut(1000).collect();
+            row_groups(&mut rows, src.len(), 4, |first, rows| {
+                for (i, row) in rows.iter_mut().enumerate() {
+                    for (j, d) in row.iter_mut().enumerate() {
+                        *d = src[(first + i) * 1000 + j] + 1;
+                    }
+                }
             })
         });
         assert!(dst.iter().zip(&src).all(|(d, s)| *d == s + 1));

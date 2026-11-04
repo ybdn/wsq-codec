@@ -42,6 +42,16 @@ pub enum DecodeError {
         /// The limit in force.
         max_pixels: usize,
     },
+    /// The buffer given to [`decode_into`] does not hold exactly one byte
+    /// per pixel.
+    ///
+    /// [`decode_into`]: crate::decode_into
+    OutputSize {
+        /// `width * height` of the image.
+        expected: usize,
+        /// Length of the buffer.
+        actual: usize,
+    },
     /// The memory the image needs could not be allocated.
     ///
     /// The frame header alone decides how much a stream asks for, so this
@@ -76,6 +86,10 @@ impl fmt::Display for DecodeError {
             } => write!(
                 f,
                 "a {width}x{height} image exceeds the limit of {max_pixels} pixels"
+            ),
+            DecodeError::OutputSize { expected, actual } => write!(
+                f,
+                "the output buffer holds {actual} bytes instead of {expected}"
             ),
             DecodeError::OutOfMemory => f.write_str("not enough memory to decode the image"),
         }
