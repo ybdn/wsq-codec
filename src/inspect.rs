@@ -71,6 +71,7 @@ pub fn read_quantized(data: &[u8], options: &DecodeOptions) -> Result<Quantized,
         trees,
         coeffs,
     } = decode::read_quantized(data, options)?;
+    let coeffs = coeffs.concat();
     let mut rest = coeffs.as_slice();
     let subbands = trees.q[..NUM_SUBBANDS]
         .iter()

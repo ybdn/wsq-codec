@@ -151,10 +151,10 @@ struct Block<'a> {
     max: usize,
 }
 
-/// Decodes `blocks` on up to `threads` threads and joins their
-/// coefficients, or returns `None` if the serial decoder would not
-/// produce the same coefficients, in which case it decides the error.
-fn decode_blocks(blocks: &[Block<'_>], threads: usize) -> Option<Vec<i16>> {
+/// Decodes `blocks` on up to `threads` threads, or returns `None` if the
+/// serial decoder would not produce the same coefficients, in which case
+/// it decides the error.
+fn decode_blocks(blocks: &[Block<'_>], threads: usize) -> Option<Vec<Vec<i16>>> {
     let mut order: Vec<usize> = (0..blocks.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(blocks[i].data.len()));
     let decoded = par::map_dynamic(&order, threads.min(blocks.len()), |i| {
@@ -171,13 +171,7 @@ fn decode_blocks(blocks: &[Block<'_>], threads: usize) -> Option<Vec<i16>> {
             return None;
         }
     }
-    let mut decoded = decoded.into_iter().flatten();
-    let mut coeffs = decoded.next().unwrap_or_default();
-    coeffs.reserve_exact(total - coeffs.len());
-    for block in decoded {
-        coeffs.extend_from_slice(&block);
-    }
-    Some(coeffs)
+    decoded.into_iter().collect()
 }
 
 /// A stream read up to its quantized coefficients.
@@ -188,8 +182,9 @@ pub(crate) struct Quantized {
     pub quant: QuantTable,
     pub trees: Trees,
     /// The coefficients of the subbands with a nonzero bin width, in
-    /// subband order, each subband row by row.
-    pub coeffs: Vec<i16>,
+    /// subband order, each subband row by row, in consecutive runs that
+    /// need not match the subbands.
+    pub coeffs: Vec<Vec<i16>>,
 }
 
 /// Reads every segment of a stream and decodes its entropy-coded data,
@@ -285,12 +280,14 @@ fn read_quantized_with(
             marker = read_block(&mut r, &table, &mut coeffs, max)?;
         }
     }
-    if parallel {
+    let coeffs = if parallel {
         let Some(decoded) = decode_blocks(&blocks, threads) else {
             return Ok(None);
         };
-        coeffs = decoded;
-    }
+        decoded
+    } else {
+        vec![coeffs]
+    };
 
     let transform = tables
         .transform
@@ -298,7 +295,7 @@ fn read_quantized_with(
     let quant = tables
         .quant
         .ok_or(DecodeError::MissingTable("quantization table"))?;
-    if coeffs.len() != quant.coefficient_count(&trees.q) {
+    if coeffs.iter().map(Vec::len).sum::<usize>() != quant.coefficient_count(&trees.q) {
         return Err(DecodeError::CorruptData(
             "fewer coefficients than the subbands hold",
         ));
@@ -401,7 +398,7 @@ mod tests {
 
     fn coefficients(data: &[u8], threads: usize) -> Result<Vec<i16>, DecodeError> {
         let options = DecodeOptions::default().with_threads(threads);
-        read_quantized(data, &options).map(|q| q.coeffs)
+        read_quantized(data, &options).map(|q| q.coeffs.concat())
     }
 
     #[test]

@@ -299,13 +299,13 @@ impl QuantTable {
 
 /// Turns quantized coefficients back into a transformed image, written
 /// into `data` whatever it holds, on up to `threads` threads. `coeffs`
-/// holds [`QuantTable::coefficient_count`] coefficients; missing ones
-/// count as zero.
+/// holds [`QuantTable::coefficient_count`] coefficients, in consecutive
+/// runs; missing ones count as zero.
 ///
 /// Each sample depends on its own coefficient only, so the image is cut
 /// into bands of rows, one per thread, each filled row by row.
 pub(crate) fn unquantize(
-    coeffs: &[i16],
+    coeffs: &[Vec<i16>],
     table: &QuantTable,
     width: usize,
     q_tree: &[QNode; Q_TREE_LEN],
@@ -335,7 +335,9 @@ pub(crate) fn unquantize(
         start += node.area();
     }
     let c = table.bin_center;
+    let coeffs = Runs::new(coeffs);
     let fill = |first_row: usize, rows: &mut [f32]| {
+        let mut joined = Vec::new();
         for (i, line) in rows.chunks_mut(width).enumerate() {
             let row = first_row + i;
             line.fill(0.0);
@@ -344,10 +346,9 @@ pub(crate) fn unquantize(
                 .filter(|k| (k.node.y..k.node.y + k.node.leny).contains(&row))
             {
                 let (node, qbin, half_z) = (k.node, k.qbin, k.half_z);
-                let from = (k.start + (row - node.y) * node.lenx).min(coeffs.len());
-                let to = (from + node.lenx).min(coeffs.len());
+                let from = k.start + (row - node.y) * node.lenx;
                 let out = &mut line[node.x..node.x + node.lenx];
-                for (out, &s) in out.iter_mut().zip(&coeffs[from..to]) {
+                for (out, &s) in out.iter_mut().zip(coeffs.get(from, node.lenx, &mut joined)) {
                     *out = match s.signum() {
                         0 => 0.0,
                         1 => (f64::from(qbin * (f32::from(s) - c)) + half_z) as f32,
@@ -369,4 +370,70 @@ pub(crate) fn unquantize(
             drop(par::spawn(scope, move || fill(i * band, rows)));
         }
     });
+}
+
+/// Coefficients held in consecutive runs, read as one sequence.
+struct Runs<'a> {
+    runs: &'a [Vec<i16>],
+    /// Where each run ends in the sequence.
+    ends: Vec<usize>,
+}
+
+impl<'a> Runs<'a> {
+    fn new(runs: &'a [Vec<i16>]) -> Self {
+        let ends = runs
+            .iter()
+            .scan(0, |end, run| {
+                *end += run.len();
+                Some(*end)
+            })
+            .collect();
+        Runs { runs, ends }
+    }
+
+    /// Up to `len` coefficients from position `from`, fewer at the end of
+    /// the sequence. Copied into `joined` when they straddle two runs.
+    fn get<'s>(&'s self, from: usize, len: usize, joined: &'s mut Vec<i16>) -> &'s [i16] {
+        let total = self.ends.last().copied().unwrap_or(0);
+        let (from, to) = (from.min(total), (from + len).min(total));
+        let i = self.ends.partition_point(|&end| end <= from);
+        let Some(run) = self.runs.get(i) else {
+            return &[];
+        };
+        let start = self.ends[i] - run.len();
+        if to <= self.ends[i] {
+            return &run[from - start..to - start];
+        }
+        joined.clear();
+        let mut at = from;
+        for (run, &end) in self.runs[i..].iter().zip(&self.ends[i..]) {
+            let start = end - run.len();
+            let stop = to.min(end);
+            joined.extend_from_slice(&run[at - start..stop - start]);
+            at = stop;
+            if at == to {
+                break;
+            }
+        }
+        joined
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runs_read_as_one_sequence() {
+        let runs = vec![vec![0, 1, 2], vec![], vec![3], vec![4, 5, 6, 7]];
+        let all: Vec<i16> = (0..8).collect();
+        let seq = Runs::new(&runs);
+        let mut joined = Vec::new();
+        for from in 0..10 {
+            for len in 0..10 {
+                let want = &all[from.min(8)..(from + len).min(8)];
+                assert_eq!(seq.get(from, len, &mut joined), want, "{from} {len}");
+            }
+        }
+    }
 }
