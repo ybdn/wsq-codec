@@ -164,7 +164,7 @@ pub fn check(dir: &Path) -> Result<(), Box<dyn Error>> {
             let label = format!("{}#{n}", path.display());
             let options = wsq_codec::DecodeOptions::default().with_max_pixels(None);
             let start = Instant::now();
-            let image = match wsq_codec::decode_with(&data[range.clone()], &options) {
+            let image = match wsq_codec::decode_with(&data[range], &options) {
                 Ok(image) => image,
                 Err(e) => {
                     failed += 1;
@@ -173,7 +173,6 @@ pub fn check(dir: &Path) -> Result<(), Box<dyn Error>> {
                 }
             };
             let ms = start.elapsed().as_secs_f64() * 1000.0;
-            let info = wsq_codec::read_info(&data[range])?;
             let ppi = image.ppi.map_or_else(|| "?".to_owned(), |p| p.to_string());
             let verdict = match reference(path, n)? {
                 None => "no reference".to_owned(),
@@ -201,7 +200,7 @@ pub fn check(dir: &Path) -> Result<(), Box<dyn Error>> {
             };
             println!(
                 "ok    {label}: {}x{} {ppi} ppi, software {}, {ms:.1} ms, {verdict}",
-                image.width, image.height, info.software
+                image.width, image.height, image.software
             );
         }
     }

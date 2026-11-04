@@ -339,6 +339,8 @@ pub(crate) fn decode(
         width: info.width,
         height: info.height,
         ppi: info.ppi,
+        software: info.software,
+        comments: info.comments,
         pixels,
     })
 }

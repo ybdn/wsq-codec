@@ -93,7 +93,11 @@ fn metadata() {
     assert_eq!(info.comments.len(), 3);
     assert!(info.comments[0].starts_with(b"NIST_COM "));
     assert_eq!(info.comments[1..], options.comments[..]);
-    assert_eq!(decode(&wsq).unwrap().ppi, Some(1000));
+    // One `decode` call gives the pixels and all the metadata.
+    let image = decode(&wsq).unwrap();
+    assert_eq!(image.ppi, info.ppi);
+    assert_eq!(image.software, 0x1234);
+    assert_eq!(image.comments, info.comments);
 }
 
 #[test]

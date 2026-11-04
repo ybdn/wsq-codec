@@ -60,7 +60,9 @@ pub use error::{DecodeError, EncodeError, ReadError, WriteError};
 /// covers a 1000 ppi palm print (about 44 million) with room to spare.
 pub const DEFAULT_MAX_PIXELS: usize = 100_000_000;
 
-/// A decoded 8-bit grayscale image.
+/// A decoded 8-bit grayscale image, with what its stream says about it, so
+/// that [`decode`] alone gives the pixels and the metadata (no second
+/// [`read_info`] call is needed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Image {
@@ -71,6 +73,12 @@ pub struct Image {
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.
     pub ppi: Option<u32>,
+    /// Implementation number of the encoder that wrote the stream, as
+    /// assigned by the FBI; 0 when unassigned. Same as [`Info::software`].
+    pub software: u16,
+    /// Payloads of the comment segments before the image data. Same as
+    /// [`Info::comments`].
+    pub comments: Vec<Vec<u8>>,
     /// Pixels in row-major order, `width * height` of them, 0 for black.
     pub pixels: Vec<u8>,
 }

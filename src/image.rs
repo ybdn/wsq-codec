@@ -21,7 +21,7 @@
 use std::io::Read;
 
 use ::image::error::{DecodingError, ImageFormatHint, ParameterError, ParameterErrorKind};
-use ::image::{ColorType, GrayImage, ImageDecoder, ImageError, ImageResult};
+use ::image::{ColorType, GrayImage, ImageDecoder, ImageError, ImageResult, Limits};
 
 use crate::{DecodeError, DecodeOptions, EncodeError, EncodeOptions, Image, Info};
 
@@ -57,6 +57,10 @@ pub fn encode_gray_image(
     let (width, height) = image.dimensions();
     crate::encode(image.as_raw(), width as usize, height as usize, options)
 }
+
+/// Peak memory of a decode per pixel, besides the output (see
+/// [`DecodeOptions::max_pixels`]).
+const PEAK_BYTES_PER_PIXEL: u64 = 8;
 
 fn decoding_error(e: DecodeError) -> ImageError {
     ImageError::Decoding(DecodingError::new(ImageFormatHint::Name("WSQ".into()), e))
@@ -117,6 +121,18 @@ impl ImageDecoder for WsqDecoder {
         ColorType::L8
     }
 
+    /// Checks the dimension limits, then reserves the decoder's peak memory
+    /// (about 8 bytes per pixel, see [`DecodeOptions::max_pixels`]) from
+    /// `max_alloc`, so that an image too large for it is refused with a
+    /// limit error before any decoding. The output buffer, which `image`
+    /// allocates, is not counted here.
+    fn set_limits(&mut self, mut limits: Limits) -> ImageResult<()> {
+        limits.check_support(&::image::LimitSupport::default())?;
+        let (width, height) = self.dimensions();
+        limits.check_dimensions(width, height)?;
+        limits.reserve(u64::from(width) * u64::from(height) * PEAK_BYTES_PER_PIXEL)
+    }
+
     fn read_image(self, buf: &mut [u8]) -> ImageResult<()> {
         crate::decode_into(&self.data, &self.options, buf).map_err(decoding_error)?;
         Ok(())
@@ -131,10 +147,24 @@ impl ImageDecoder for WsqDecoder {
 /// by their start-of-image marker, with [`WsqDecoder`] and the default
 /// [`DecodeOptions`]. Returns `false` if a decoder for the `wsq` extension
 /// was already registered, in which case it stays in place.
+///
+/// This is [`register_hooks_with`] with the default options.
 pub fn register_hooks() -> bool {
+    register_hooks_with(DecodeOptions::default())
+}
+
+/// Like [`register_hooks`], with the given [`DecodeOptions`] for every
+/// stream `image` opens, for instance to set
+/// [`max_pixels`](DecodeOptions::max_pixels) or
+/// [`threads`](DecodeOptions::threads).
+///
+/// The hooks are global to the process and registered once: the first
+/// registration wins, and later ones (with any options) return `false` and
+/// change nothing. Register them early, before any other code or crate does.
+pub fn register_hooks_with(options: DecodeOptions) -> bool {
     let registered = ::image::hooks::register_decoding_hook(
         "wsq".into(),
-        Box::new(|reader| Ok(Box::new(WsqDecoder::new(reader)?))),
+        Box::new(move |reader| Ok(Box::new(WsqDecoder::with_options(reader, options.clone())?))),
     );
     if registered {
         ::image::hooks::register_format_detection_hook("wsq".into(), &[0xFF, 0xA0], None);

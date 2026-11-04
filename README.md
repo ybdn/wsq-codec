@@ -53,7 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 needs the whole stream before it can produce a pixel, so `decode_from` reads to the end: wrap
 the reader in `Read::take` when the stream sits inside a larger file.
 
-`read_info` returns the dimensions, resolution and comments without decoding the image.
+`read_info` returns the dimensions, resolution and comments without decoding the image; `decode`
+returns the same metadata (`ppi`, `software`, `comments`) with the pixels.
 `decode_with` takes `DecodeOptions`, whose `max_pixels` bounds the image size; decoding needs
 about 8 bytes per pixel at its peak (787 MiB measured for a 10000 by 10000 image on Linux
 x86-64). A stream of under 1 KB can declare such an image, so on untrusted input keep the limit
@@ -74,6 +75,10 @@ images convert into `image::GrayImage` (`TryFrom`), `wsq_codec::image::encode_gr
 wsq_codec::image::register_hooks();
 let gray = image::open("finger.wsq")?.to_luma8();
 ```
+
+`register_hooks_with(DecodeOptions)` sets the options the hooks decode with (the hooks are global:
+the first registration wins). `WsqDecoder` honours `image::Limits`: `max_alloc` must cover about
+8 bytes per pixel, or the image is refused before decoding.
 
 ## Command line
 
