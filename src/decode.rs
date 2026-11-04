@@ -126,7 +126,24 @@ fn read_block(
     }
 }
 
-pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
+/// A stream read up to its quantized coefficients.
+pub(crate) struct Quantized {
+    pub info: Info,
+    pub frame: FrameHeader,
+    pub transform: TransformTable,
+    pub quant: QuantTable,
+    pub trees: Trees,
+    /// The coefficients of the subbands with a nonzero bin width, in
+    /// subband order, each subband row by row.
+    pub coeffs: Vec<i16>,
+}
+
+/// Reads every segment of a stream and decodes its entropy-coded data,
+/// stopping short of dequantization.
+pub(crate) fn read_quantized(
+    data: &[u8],
+    options: &DecodeOptions,
+) -> Result<Quantized, DecodeError> {
     let mut r = ByteReader::new(data);
     let header = read_header(&mut r)?;
     let info = header.info();
@@ -145,8 +162,7 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
         next,
         ..
     } = header;
-    let (width, height) = (info.width, info.height);
-    let trees = Trees::new(width, height);
+    let trees = Trees::new(info.width, info.height);
 
     let mut coeffs = Vec::new();
     let mut marker = next;
@@ -185,6 +201,26 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
             "fewer coefficients than the subbands hold",
         ));
     }
+    Ok(Quantized {
+        info,
+        frame,
+        transform,
+        quant,
+        trees,
+        coeffs,
+    })
+}
+
+pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
+    let Quantized {
+        info,
+        frame,
+        transform,
+        quant,
+        trees,
+        coeffs,
+    } = read_quantized(data, options)?;
+    let (width, height) = (info.width, info.height);
     let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q);
     drop(coeffs);
     let threads = crate::thread_count(options.threads);

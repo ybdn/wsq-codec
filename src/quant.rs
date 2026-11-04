@@ -2,10 +2,12 @@
 //!
 //! Intermediate values keep the single and double precision mix of the
 //! NIST reference implementation, so quantization decisions, and thus the
-//! encoded bytes, come out the same.
+//! encoded bytes, come out the same. Logarithms and powers come from
+//! [`math`], not from the platform's math library, so they also come out
+//! the same on every platform.
 
-use crate::par;
 use crate::tree::{NUM_SUBBANDS, Q_TREE_LEN, QNode, START_SUBBAND_3};
+use crate::{math, par};
 
 /// Subbands whose variance is below this carry no information and are
 /// dropped.
@@ -97,7 +99,8 @@ pub(crate) fn bin_widths(var: &[f32; Q_TREE_LEN], bitrate: f32) -> QuantParams {
         } else if cnt < START_SIZE_REGION_2 {
             qbss[cnt] = 1.0;
         } else {
-            qbss[cnt] = (10.0 / f64::from(weight[cnt] * f64::from(var[cnt]).ln() as f32)) as f32;
+            qbss[cnt] =
+                (10.0 / f64::from(weight[cnt] * math::ln(f64::from(var[cnt])) as f32)) as f32;
         }
     }
 
@@ -129,10 +132,10 @@ pub(crate) fn bin_widths(var: &[f32; Q_TREE_LEN], bitrate: f32) -> QuantParams {
         }
         let mut p = 1.0f32;
         for &c in &k {
-            p = (f64::from(p) * f64::from(sigma[c] / qbss[c]).powf(f64::from(m(c)))) as f32;
+            p = (f64::from(p) * math::pow(f64::from(sigma[c] / qbss[c]), f64::from(m(c)))) as f32;
         }
-        let q = ((2.0f64.powf(f64::from(bitrate / s) - 1.0) / 2.5)
-            / f64::from(p).powf(1.0 / f64::from(s))) as f32;
+        let q = ((math::pow(2.0, f64::from(bitrate / s) - 1.0) / 2.5)
+            / math::pow(f64::from(p), 1.0 / f64::from(s))) as f32;
         let before = k.len();
         #[allow(clippy::neg_cmp_op_on_partial_ord)] // keeps NaN handling of the reference
         k.retain(|&c| !(f64::from(qbss[c] / q) >= 5.0 * f64::from(sigma[c])));

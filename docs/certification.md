@@ -41,13 +41,59 @@ requires recertification.
 - The certification images and NIST's reference files are not in this repository and must be
   requested from NIST. Never commit them.
 
+## Running the tests locally
+
+The `wsq` example carries a kit that produces a submission and checks it against NIST's
+references before anything is sent. NIST's images and reference files stay outside the
+repository.
+
+```sh
+# Encoder tests: every .pgm under nist/images, at 0.75 and 2.25 bits per pixel,
+# into out/0.75/ and out/2.25/; also writes out/submission.txt, the platform
+# description to complete by hand.
+cargo run --release --example wsq -- cert encode nist/images out --software N
+
+# Decoder tests: every .wsq under nist/streams, into binary PGM (P5).
+cargo run --release --example wsq -- cert decode nist/streams out/decoded
+
+# Comparison with NIST's reference streams and reconstructions, at the same
+# relative paths.
+cargo run --release --example wsq -- cert compare out nist/reference-streams
+cargo run --release --example wsq -- cert compare out/decoded nist/reference-images
+```
+
+For each stream, `compare` reports the file size difference, the header parameters (`M`, `R`),
+the largest relative difference of the bin widths (`Q`, `Z`), the subbands one side drops and
+the other keeps, and how many bin indices differ and by how much. For each reconstruction, it
+reports how many pixels differ and by how much. It does not judge the differences: the accuracy
+requirements are those of the specification. It exits with status 2 when a reference file has
+no readable counterpart. The file names and directory layout NIST expects come with the test
+data, and the output may need renaming to match them.
+
+The same values are available to other tools through `wsq_codec::inspect::read_quantized`.
+
+## Certified and optimized releases
+
+The plan is to certify a frozen, conformant encoder and decoder while the rest of the crate
+keeps improving:
+
+- a conformant profile, the current encoder, whose output stays aligned with the reference
+  implementation and, since it computes its own logarithms and powers, does not depend on the
+  platform; only it may write the implementation number the FBI assigns;
+- an optimized profile, free to depart from the reference as long as every WSQ decoder reads
+  its output, and never certified;
+- the conformant code in its own crate, versioned with the certificate, so that releases of the
+  optimized encoder, bindings and tools leave the certified code untouched.
+
 ## Open points
 
 - **Implementation number.** It is assigned through the certification process; there is nothing to
   pick in advance. Until then, keep `software = 0`.
-- **Per-configuration scope.** Byte-identical encoding depends on the platform's `pow` and `log`
-  (see the README). Each OS/compiler to be certified needs its own run, and a toolchain update
-  could in principle require a new one.
+- **Per-configuration scope.** The certificate still names one configuration, but the encoder's
+  output no longer depends on the platform's math library: logarithms and powers are computed
+  in the crate and correctly rounded (`src/math.rs`), and the rest is IEEE 754 arithmetic that
+  rounds alike everywhere. Every platform should therefore produce the same files, which `cert
+  compare` can confirm between platforms before each submission.
 - **Images below 81 pixels, and the flat-image widening** (README, "Differences from NBIS") depart
   from NBIS. Check that no certification image triggers them.
 - **Decision (maintainer).** Whether the crate's users need the certificate. Without it the crate

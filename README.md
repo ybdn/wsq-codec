@@ -100,6 +100,12 @@ and does nothing otherwise, so the corpus never has to leave the machine that ho
 WSQ_CORPUS_DIR=/path/to/corpus cargo test --release --test corpus -- --nocapture
 ```
 
+## Certification
+
+The crate is not certified by the FBI. `docs/certification.md` describes the procedure, the
+plan to pursue it, and the `cert` commands of the example, which run the certification tests
+locally and compare the output with NIST's reference files.
+
 ## Differences from NBIS
 
 The encoder departs from NBIS only where NBIS's output is broken:
@@ -114,9 +120,13 @@ The encoder departs from NBIS only where NBIS's output is broken:
 The decoder rejects streams whose blocks hold fewer coefficients than the subbands need, where
 NBIS would read uninitialized memory.
 
-Byte-identical encoding relies on the platform's `pow` and `log` rounding like glibc's. CI
-checks it on Linux, macOS and Windows against the NBIS fixtures; an image whose bit allocation
-hits a rounding difference could still get a quantizer bin that differs in its last digit.
+The encoder's output is the same on every platform: the logarithms and powers of the bit
+allocation are computed by the crate itself, in double-double arithmetic, and correctly rounded,
+rather than by the platform's math library, whose last bit varies between systems. glibc's `log`
+and `pow`, which NBIS used for the fixtures, return the correctly rounded result on all but rare
+inputs (about 1 in 1000 for `pow`); an image whose bit allocation hits one of those would get a
+quantizer bin differing from NBIS's in its last digit, identically on every platform. CI checks
+the NBIS fixtures on Linux, macOS and Windows.
 
 ## Performance
 
