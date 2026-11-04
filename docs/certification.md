@@ -50,8 +50,11 @@ repository.
 ```sh
 # Encoder tests: every .pgm under nist/images, at 0.75 and 2.25 bits per pixel,
 # into out/0.75/ and out/2.25/; also writes out/submission.txt, the platform
-# description to complete by hand.
-cargo run --release --example wsq -- cert encode nist/images out --software N
+# description to complete by hand. The compiler is never guessed: --compiler
+# records what you pass, which must come from the toolchain that built the
+# binary under test (the `rustc` on the PATH may be another one).
+cargo run --release --example wsq -- cert encode nist/images out --software N \
+  --compiler "$(rustc -vV)"
 
 # Decoder tests: every .wsq under nist/streams, into binary PGM (P5).
 cargo run --release --example wsq -- cert decode nist/streams out/decoded
@@ -96,6 +99,7 @@ keeps improving:
   compare` can confirm between platforms before each submission.
 - **Images below 81 pixels, and the flat-image widening** (README, "Differences from NBIS") depart
   from NBIS. Check that no certification image triggers them.
-- **Decision (maintainer).** Whether the crate's users need the certificate. Without it the crate
-  remains usable for decoding, and for encoding where no certified encoder is required. Pursue it
-  only once the API is frozen (issue #10), since the certificate is tied to a version.
+- **Certificate and releases.** Decided: the project ships certified releases (profile
+  `Conformant`) and optimized ones (profile `Optimized`), as described above. The certificate
+  is tied to a version, so it is pursued once the API is frozen for 1.0; the order of the work
+  is in the roadmap, issue #17 of the repository.
