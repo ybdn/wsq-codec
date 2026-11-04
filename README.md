@@ -8,8 +8,7 @@
 
 Rust decoder and encoder for **WSQ** (Wavelet Scalar Quantization) fingerprint images, the
 compression the FBI specifies (IAFIS-IC-0110, version 3.1) and that ANSI/NIST-ITL transactions
-carry in Types 4 and 14. As far as a search of crates.io showed on 2026-11-04, it is the first
-WSQ codec published there.
+carry in Types 4 and 14.
 
 > **Not affiliated, not certified.** This project is not affiliated with or endorsed by the FBI
 > or NIST, and the crate is not certified by the FBI. [docs/certification.md](docs/certification.md)
