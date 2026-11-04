@@ -2,13 +2,21 @@
 
 ## Unreleased
 
+- The `wsq` command line is now an installable crate, `wsq-cli` (directory `cli/`, binary `wsq`),
+  in a Cargo workspace with the library: `cargo install wsq-cli`. It has the example's commands
+  (`encode`, `decode`, `info`, `check`, `extract`, `cert`), plus `--help` and `--version`, and
+  exits with 64 on a usage error. It adds no dependency: argument parsing is by hand, and
+  `wsq-codec` still has no dependency for its users. `examples/wsq` is gone; `cargo run --example
+  wsq --` becomes `cargo run -p wsq-cli --` or `wsq`. The binary has tests (round trip, exit codes,
+  `--help`). `tests/corpus.rs` moved to `cli/tests/corpus.rs`. Prebuilt binaries wait for the
+  release workflow (#40). (#47)
 - `wsq cert compare` judges each stream and each reconstruction by the accuracy requirements of
   IAFIS-IC-0110 v3.1, Annex AA (file size within 0.4%, bin widths within 0.051%, 99.99% of the
   bin indices identical and none off by more than 1; for decoders, 99.9% of the pixels identical
   and none off by more than 1), prints `PASS` or `FAIL` with the clause next to the numbers it
   already gave, and ends with a summary. It exits with status 3 when a requirement fails (2 stays
   for a reference file without a readable counterpart). The limits are in
-  `examples/wsq/accuracy.rs`, with unit tests on each side of every limit; the points the
+  `cli/src/accuracy.rs`, with unit tests on each side of every limit; the points the
   specification leaves open are listed in `docs/certification.md` as questions for NIST.
 - The platform-independence claim is worded as determinism, not exact rounding, and scoped to
   targets with IEEE 754 `f64` (not x87-only ones such as `i586`). `docs/certification.md` cites

@@ -108,7 +108,7 @@ This crate sums in 64 bits and encodes them, so there is no NBIS reference for s
 
 ## Real-world files
 
-Results of `cargo run --release --example wsq -- check`, with reference decodes from NBIS 5.0.0's
+Results of `wsq check`, with reference decodes from NBIS 5.0.0's
 decoder (`harness d`, built as above). None of these files is committed here.
 
 | source | encoder | streams | outcome |

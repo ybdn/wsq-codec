@@ -1,0 +1,20 @@
+[package]
+name = "wsq-cli"
+version = "0.1.1"
+edition = "2024"
+rust-version = "1.85"
+description = "Command-line tool for WSQ fingerprint images: encode, decode, inspect and certify"
+license = "MIT"
+repository = "https://github.com/ybdn/wsq-codec"
+homepage = "https://github.com/ybdn/wsq-codec"
+readme = "README.md"
+keywords = ["wsq", "fingerprint", "biometrics", "cli"]
+categories = ["command-line-utilities", "multimedia::images"]
+
+# Hand-written argument parsing: the tool adds no dependency beyond the codec itself.
+[dependencies]
+wsq-codec = { version = "0.1.1", path = ".." }
+
+[[bin]]
+name = "wsq"
+path = "src/main.rs"

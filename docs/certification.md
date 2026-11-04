@@ -53,16 +53,16 @@ repository.
 # description to complete by hand. The compiler is never guessed: --compiler
 # records what you pass, which must come from the toolchain that built the
 # binary under test (the `rustc` on the PATH may be another one).
-cargo run --release --example wsq -- cert encode nist/images out --software N \
+wsq cert encode nist/images out --software N \
   --compiler "$(rustc -vV)"
 
 # Decoder tests: every .wsq under nist/streams, into binary PGM (P5).
-cargo run --release --example wsq -- cert decode nist/streams out/decoded
+wsq cert decode nist/streams out/decoded
 
 # Comparison with NIST's reference streams and reconstructions, at the same
 # relative paths.
-cargo run --release --example wsq -- cert compare out nist/reference-streams
-cargo run --release --example wsq -- cert compare out/decoded nist/reference-images
+wsq cert compare out nist/reference-streams
+wsq cert compare out/decoded nist/reference-images
 ```
 
 For each stream, `compare` reports the file size difference, the header parameters (`M`, `R`),
@@ -81,7 +81,7 @@ layout NIST expects come with the test data, and the output may need renaming to
 
 Source: IAFIS-IC-0110 v3.1 (October 4, 2010), Part 2, "Compliance Tests", Annex AA,
 "Procedures for Determining Compliance" (printed page 37, page 45 of the PDF), read from the
-specification itself. They are in `examples/wsq/accuracy.rs`, where each limit cites its clause
+specification itself. They are in `cli/src/accuracy.rs`, where each limit cites its clause
 and has unit tests just inside and just outside it.
 
 | clause | applies to | requirement |

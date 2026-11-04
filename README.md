@@ -75,12 +75,16 @@ wsq_codec::image::register_hooks();
 let gray = image::open("finger.wsq")?.to_luma8();
 ```
 
-An example converts between binary PGM and WSQ:
+## Command line
+
+The `wsq` tool (crate `wsq-cli`, in `cli/`) converts between binary PGM and WSQ. Install it with
+`cargo install wsq-cli` (or `cargo install --git https://github.com/ybdn/wsq-codec wsq-cli`);
+`wsq --help` lists the commands:
 
 ```sh
-cargo run --release --example wsq -- encode finger.pgm finger.wsq 0.75 500
-cargo run --release --example wsq -- decode finger.wsq finger.pgm
-cargo run --release --example wsq -- info finger.wsq
+wsq encode finger.pgm finger.wsq 0.75 500
+wsq decode finger.wsq finger.pgm
+wsq info finger.wsq
 ```
 
 ## ANSI/NIST-ITL transactions
@@ -95,10 +99,10 @@ from other parties, keep the decoder's pixel limit.
 
 ## Checking real files
 
-The same example checks the decoder on a collection of files, locally:
+The same tool checks the decoder on a collection of files, locally:
 
 ```sh
-cargo run --release --example wsq -- check /path/to/corpus
+wsq check /path/to/corpus
 ```
 
 It decodes every WSQ stream under the directory, including streams inside other files such as
@@ -110,10 +114,10 @@ for the `N`th stream inside another file `name.ext`. `.raw` files hold the bare 
 `extract` writes them out as `name.N.wsq`:
 
 ```sh
-cargo run --release --example wsq -- extract case.eft   # case.1.wsq, case.2.wsq, ...
+wsq extract case.eft   # case.1.wsq, case.2.wsq, ...
 ```
 
-`tests/corpus.rs` runs the same check under `cargo test` when `WSQ_CORPUS_DIR` names a corpus,
+`cli/tests/corpus.rs` runs the same check under `cargo test` when `WSQ_CORPUS_DIR` names a corpus,
 and does nothing otherwise, so the corpus never has to leave the machine that holds it:
 
 ```sh
