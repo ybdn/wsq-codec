@@ -179,6 +179,17 @@ by rows and by columns, quantization by subbands, and the conversions between pi
 floats by chunks; each value goes through the same arithmetic either way, so the result is
 unchanged. Huffman coding stays on one thread. Threads pay off on large images only.
 
+## Quality
+
+`benches/quality.rs` encodes generated images at several bit rates and reports, per image and
+per requested rate, the actual bit rate and file size, the PSNR and SSIM of the reconstruction
+and the encoding and decoding time (`cargo bench --bench quality`). It prints a table and, with
+`--csv FILE`, every measurement as CSV. `--nbis BIN_DIR` runs NBIS 5.0.0's `cwsq` and `dwsq` on
+the same images and compares streams and reconstructions, and `--nbis-streams DIR` reads
+streams NBIS wrote elsewhere. `WSQ_QUALITY_DIR` names a local directory of PGM files to measure
+too; it stays outside the repository. `docs/quality.md` holds the first table, with the
+conditions of measurement.
+
 ## Contributing and security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks to run and the branch flow, and

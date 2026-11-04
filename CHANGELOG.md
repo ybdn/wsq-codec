@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A quality benchmark, `cargo bench --bench quality` (`benches/quality.rs`): it encodes
+  integer-generated images at 0.5, 0.75, 1.0 and 2.25 bits per pixel (`--rates` changes them) and
+  reports, per image and rate, the file size, the actual bit rate against the requested one, the
+  PSNR and SSIM of the reconstruction and the encoding and decoding time, as a table and as CSV
+  (`--csv`). `--nbis BIN_DIR` also runs NBIS's `cwsq` and `dwsq` on the same images and fails if
+  a stream or a reconstruction differs from this crate's; `--nbis-streams DIR` reads streams NBIS
+  wrote elsewhere; `WSQ_QUALITY_DIR` adds a local directory of PGM files. CI runs it on the
+  synthetic set and judges nothing. `docs/quality.md` has the first table for the conformant
+  encoder, dated and with the conditions of measurement: on the 20 measurements (five images,
+  four rates) NBIS's streams and reconstructions are identical to this crate's to the byte.
 - The `wsq` command line is now an installable crate, `wsq-cli` (directory `cli/`, binary `wsq`),
   in a Cargo workspace with the library: `cargo install wsq-cli`. It has the example's commands
   (`encode`, `decode`, `info`, `check`, `extract`, `cert`), plus `--help` and `--version`, and

@@ -390,7 +390,7 @@ fn csv_line(row: &Row, source: &str, m: &Measure, identical: Option<bool>) -> St
     let ms = |t: Option<f64>| t.map_or(String::new(), |t| format!("{t:.1}"));
     let times = m.times;
     format!(
-        "{source},{},{},{},{},{},{},{:.4},{},{:.5},{},{},{}",
+        "{source},{},{},{},{},{},{},{:.4},{},{:.4},{},{},{}",
         row.image,
         row.width,
         row.height,
