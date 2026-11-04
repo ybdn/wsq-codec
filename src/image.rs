@@ -46,6 +46,10 @@ impl TryFrom<Image> for GrayImage {
 
 /// Encodes a grayscale image, whose dimensions must be between 81 and
 /// 65535 as for [`encode`](crate::encode).
+///
+/// # Errors
+///
+/// Returns the [`EncodeError`] that [`encode`](crate::encode) gives.
 pub fn encode_gray_image(
     image: &GrayImage,
     options: &EncodeOptions,
@@ -73,11 +77,20 @@ impl WsqDecoder {
     /// Reads a whole WSQ stream from `reader`, which should end with it
     /// (see [`decode_from`](crate::decode_from)), to decode it with the
     /// default [`DecodeOptions`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if reading fails, or if the headers are not a valid WSQ stream
+    /// or announce more pixels than the options allow.
     pub fn new<R: Read>(reader: R) -> ImageResult<Self> {
         Self::with_options(reader, DecodeOptions::default())
     }
 
     /// Like [`new`](Self::new), with the given [`DecodeOptions`].
+    ///
+    /// # Errors
+    ///
+    /// Fails in the same cases as [`new`](Self::new).
     pub fn with_options<R: Read>(mut reader: R, options: DecodeOptions) -> ImageResult<Self> {
         let mut data = Vec::new();
         reader.read_to_end(&mut data)?;

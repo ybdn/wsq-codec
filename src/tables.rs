@@ -41,7 +41,8 @@ fn to_scaled_u16(v: f32) -> Option<(u8, u16)> {
     if v == 0.0 {
         return Some((0, 0));
     }
-    if v.is_nan() || v >= 65535.0 {
+    // Negative values would never leave the loop below.
+    if v.is_nan() || !(0.0..65535.0).contains(&v) {
         return None;
     }
     let mut t = v;
@@ -307,6 +308,25 @@ pub(crate) fn write_comment(out: &mut Vec<u8>, payload: &[u8]) -> Result<(), Enc
 mod tests {
     use super::*;
     use crate::wavelet::{HIFILT, LOFILT};
+
+    #[test]
+    fn to_scaled_u16_rejects_what_does_not_fit() {
+        assert_eq!(to_scaled_u16(0.0), Some((0, 0)));
+        assert_eq!(to_scaled_u16(-0.0), Some((0, 0)));
+        for v in [
+            -1.0,
+            -1e-30,
+            f32::MIN,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            65535.0,
+            f32::INFINITY,
+        ] {
+            assert_eq!(to_scaled_u16(v), None, "{v}");
+        }
+        let (scale, mantissa) = to_scaled_u16(1.5).unwrap();
+        assert_eq!(descale(f32::from(mantissa), scale), 1.5);
+    }
 
     #[test]
     fn standard_transform_table() {

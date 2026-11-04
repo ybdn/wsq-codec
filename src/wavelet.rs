@@ -8,6 +8,7 @@
 //! recorded once per line length as a [`Plan`], which then filters many
 //! rows or columns side by side.
 
+use crate::par;
 use crate::tree::{W_TREE_LEN, WNode};
 
 /// Analysis low-pass filter of the standard WSQ filter bank (9 taps).
@@ -216,7 +217,7 @@ impl Plan {
         let size = src.len().div_ceil(parts);
         std::thread::scope(|scope| {
             for (src, dst) in src.chunks(size).zip(dst.chunks_mut(size)) {
-                scope.spawn(move || self.apply_rows(src, dst));
+                drop(par::spawn(scope, move || self.apply_rows(src, dst)));
             }
         });
     }
@@ -243,7 +244,9 @@ impl Plan {
                     .iter()
                     .map(|row| &row[start..(start + size).min(cols)])
                     .collect();
-                scope.spawn(move || self.apply_columns(&src, &mut dst));
+                drop(par::spawn(scope, move || {
+                    self.apply_columns(&src, &mut dst)
+                }));
             }
         });
     }
