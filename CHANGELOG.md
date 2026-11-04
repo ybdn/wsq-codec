@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0
+
 - `decode` returns the stream's metadata with the pixels (#29): `Image` gains `software` and
   `comments` next to `ppi`, so no second `read_info` call is needed (`wsq check` no longer makes
   one). `Image` is `#[non_exhaustive]`, so this is not a breaking change.
