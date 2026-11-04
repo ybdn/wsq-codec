@@ -6,6 +6,7 @@
 //! [`math`], not from the platform's math library, so they also come out
 //! the same on every platform.
 
+use crate::mem::{self, OutOfMemory};
 use crate::tree::{NUM_SUBBANDS, Q_TREE_LEN, QNode, START_SUBBAND_3};
 use crate::{math, par};
 
@@ -226,18 +227,18 @@ pub(crate) fn quantize(
     q_tree: &[QNode; Q_TREE_LEN],
     params: &QuantParams,
     threads: usize,
-) -> Vec<i16> {
+) -> Result<Vec<i16>, OutOfMemory> {
     let kept: Vec<usize> = (0..NUM_SUBBANDS)
         .filter(|&c| params.qbss[c] != 0.0)
         .collect();
     let total: usize = kept.iter().map(|&c| q_tree[c].area()).sum();
     let run = |subbands: &[usize]| {
         let len = subbands.iter().map(|&c| q_tree[c].area()).sum();
-        let mut out = Vec::with_capacity(len);
+        let mut out = mem::with_capacity(len)?;
         for &c in subbands {
             quantize_subband(data, width, &q_tree[c], params, c, &mut out);
         }
-        out
+        Ok(out)
     };
     let parts = par::parts(threads, total);
     if parts == 1 {
@@ -259,11 +260,11 @@ pub(crate) fn quantize(
             .iter()
             .map(|subbands| par::spawn(scope, || run(subbands)))
             .collect();
-        let mut out = Vec::with_capacity(total);
+        let mut out = mem::with_capacity(total)?;
         for handle in handles {
-            out.extend(handle.join());
+            out.extend(handle.join()?);
         }
-        out
+        Ok(out)
     })
 }
 
@@ -293,8 +294,8 @@ pub(crate) fn unquantize(
     width: usize,
     height: usize,
     q_tree: &[QNode; Q_TREE_LEN],
-) -> Vec<f32> {
-    let mut data = vec![0.0f32; width * height];
+) -> Result<Vec<f32>, OutOfMemory> {
+    let mut data = mem::filled(width * height, 0.0f32)?;
     let mut coeffs = coeffs;
     let c = table.bin_center;
     for (cnt, node) in q_tree.iter().enumerate().take(NUM_SUBBANDS) {
@@ -316,5 +317,5 @@ pub(crate) fn unquantize(
             }
         }
     }
-    data
+    Ok(data)
 }

@@ -55,7 +55,13 @@ the reader in `Read::take` when the stream sits inside a larger file.
 
 `read_info` returns the dimensions, resolution and comments without decoding the image.
 `decode_with` takes `DecodeOptions`, whose `max_pixels` bounds the image size; decoding needs
-about 11 bytes per pixel at its peak.
+about 8 bytes per pixel at its peak (787 MiB measured for a 10000 by 10000 image on Linux
+x86-64). A stream of under 1 KB can declare such an image, so on untrusted input keep the limit
+low. For ANSI/NIST transactions, call `read_info` first and compare the dimensions with the
+record's own fields, or derive `max_pixels` from them. The image-sized buffers are allocated
+fallibly: when one cannot be, `decode_with` and `encode` return `OutOfMemory` instead of
+aborting, and `decode_with` does the same on a 32-bit target for a size beyond its address
+space, even with `max_pixels: None`.
 
 The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choice for 500 ppi
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.

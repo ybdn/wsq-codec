@@ -8,6 +8,7 @@
 //! recorded once per line length as a [`Plan`], which then filters many
 //! rows or columns side by side.
 
+use crate::mem::{self, OutOfMemory};
 use crate::par;
 use crate::tree::{W_TREE_LEN, WNode};
 
@@ -595,8 +596,8 @@ pub(crate) fn decompose(
     width: usize,
     tree: &[WNode; W_TREE_LEN],
     threads: usize,
-) {
-    let mut tmp = vec![0.0f32; data.len()];
+) -> Result<(), OutOfMemory> {
+    let mut tmp = mem::filled(data.len(), 0.0f32)?;
     for node in tree {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
         // Rows: image -> tmp.
@@ -614,6 +615,7 @@ pub(crate) fn decompose(
             threads,
         );
     }
+    Ok(())
 }
 
 /// Inverse transform of the whole image in place, on up to `threads`
@@ -626,8 +628,8 @@ pub(crate) fn reconstruct(
     lo: &[f32],
     hi: &[f32],
     threads: usize,
-) {
-    let mut tmp = vec![0.0f32; data.len()];
+) -> Result<(), OutOfMemory> {
+    let mut tmp = mem::filled(data.len(), 0.0f32)?;
     for node in tree.iter().rev() {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
         // Columns: image -> tmp.
@@ -645,4 +647,5 @@ pub(crate) fn reconstruct(
             threads,
         );
     }
+    Ok(())
 }

@@ -1,6 +1,7 @@
 use crate::bits::ByteReader;
 use crate::error::DecodeError;
 use crate::huffman::{DecodeTable, HuffmanSpec, Item};
+use crate::mem;
 use crate::quant::{self, QuantTable};
 use crate::tables::{
     self, COM, DHT, DQT, DTT, EOI, FrameHeader, MAX_DHT_TABLES, SOB, SOF, SOI, TransformTable,
@@ -187,6 +188,9 @@ pub(crate) fn read_quantized(
             .as_ref()
             .ok_or(DecodeError::MissingTable("quantization table"))?;
         let max = quant.coefficient_count(&trees.q);
+        // Once for all blocks, instead of the doubling of `push`.
+        let missing = max.saturating_sub(coeffs.len());
+        mem::reserve(&mut coeffs, missing)?;
         marker = read_block(&mut r, &table, &mut coeffs, max)?;
     }
 
@@ -221,7 +225,7 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
         coeffs,
     } = read_quantized(data, options)?;
     let (width, height) = (info.width, info.height);
-    let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q);
+    let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q)?;
     drop(coeffs);
     let threads = crate::thread_count(options.threads);
     wavelet::reconstruct(
@@ -231,9 +235,9 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
         &transform.lo,
         &transform.hi,
         threads,
-    );
+    )?;
 
-    let mut pixels = vec![0u8; data.len()];
+    let mut pixels = mem::filled(data.len(), 0u8)?;
     par::zip_chunks(&data, &mut pixels, threads, |data, pixels| {
         for (p, &v) in pixels.iter_mut().zip(data) {
             let v = (f64::from(v * frame.r_scale + frame.m_shift) + 0.5) as f32;

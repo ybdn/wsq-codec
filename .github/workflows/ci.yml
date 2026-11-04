@@ -47,6 +47,20 @@ jobs:
       - run: cargo build --target wasm32-unknown-unknown
       - run: cargo build --target wasm32-unknown-unknown --features image
 
+  # 32-bit address space: a 65535 by 65535 header must give an error, not a
+  # "capacity overflow" panic (see the allocation notes in `src/mem.rs`).
+  i686:
+    name: test (i686-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: i686-unknown-linux-gnu
+      - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - run: cargo test --release --target i686-unknown-linux-gnu --lib --tests
+
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -8,6 +8,7 @@
 //! and what tools comparing two encoders need.
 
 use crate::decode::{self, Quantized as Raw};
+use crate::mem;
 use crate::tree::NUM_SUBBANDS;
 use crate::{DecodeError, DecodeOptions, Info};
 
@@ -80,17 +81,19 @@ pub fn read_quantized(data: &[u8], options: &DecodeOptions) -> Result<Quantized,
             let n = if q_bin == 0.0 { 0 } else { node.area() };
             let (coefficients, tail) = rest.split_at(n);
             rest = tail;
-            Subband {
+            let mut copy = mem::with_capacity(n)?;
+            copy.extend_from_slice(coefficients);
+            Ok(Subband {
                 x: node.x,
                 y: node.y,
                 width: node.lenx,
                 height: node.leny,
                 q_bin,
                 z_bin: quant.z_bin[i],
-                coefficients: coefficients.to_vec(),
-            }
+                coefficients: copy,
+            })
         })
-        .collect();
+        .collect::<Result<_, DecodeError>>()?;
     Ok(Quantized {
         info,
         m_shift: frame.m_shift,

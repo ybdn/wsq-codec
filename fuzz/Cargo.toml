@@ -1,0 +1,46 @@
+[package]
+name = "wsq-codec-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+wsq-codec = { path = ".." }
+
+# Not part of the root package, which does not ship this directory.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "decode_with"
+path = "fuzz_targets/decode_with.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read_info"
+path = "fuzz_targets/read_info.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read_quantized"
+path = "fuzz_targets/read_quantized.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+bench = false
