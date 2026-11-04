@@ -68,10 +68,52 @@ cargo run --release --example wsq -- cert compare out/decoded nist/reference-ima
 For each stream, `compare` reports the file size difference, the header parameters (`M`, `R`),
 the largest relative difference of the bin widths (`Q`, `Z`), the subbands one side drops and
 the other keeps, and how many bin indices differ and by how much. For each reconstruction, it
-reports how many pixels differ and by how much. It does not judge the differences: the accuracy
-requirements are those of the specification. It exits with status 2 when a reference file has
-no readable counterpart. The file names and directory layout NIST expects come with the test
-data, and the output may need renaming to match them.
+reports how many pixels differ and by how much. Then, after each file's numbers, it prints
+`PASS` or `FAIL` with the failed requirements and their clause, and ends with a summary
+(`verdict (IAFIS-IC-0110 v3.1, Annex AA): streams 79/80 pass; ...`). The numbers stay as they
+were; the verdict is the accuracy requirements below. The exit status is 0 when every file
+passes, 2 when a reference file has no readable counterpart (it gets no verdict), and 3 when a
+requirement fails (3 wins when both happen). A `PASS` is a local pre-check against the
+specification's text, not NIST's verdict and not a certificate. The file names and directory
+layout NIST expects come with the test data, and the output may need renaming to match them.
+
+## Accuracy requirements
+
+Source: IAFIS-IC-0110 v3.1 (October 4, 2010), Part 2, "Compliance Tests", Annex AA,
+"Procedures for Determining Compliance" (printed page 37, page 45 of the PDF), read from the
+specification itself. They are in `examples/wsq/accuracy.rs`, where each limit cites its clause
+and has unit tests just inside and just outside it.
+
+| clause | applies to | requirement |
+|---|---|---|
+| AA.2 item 1 | encoder | the compressed file size, excluding comments, is within 0.4% of the reference's |
+| AA.2 item 2 | encoder | every quantization bin width `Q` and zero bin width `Z`, for the subbands `0 <= k <= 59`, is within 0.051% of the reference's |
+| AA.2 item 3 | encoder | at least 99.99% of the bin indices are the reference's, and none differs from it by more than 1 |
+| AA.3 item 1 | decoder | at least 99.9% of the reconstructed values are the reference's, and none differs from it by more than 1 |
+
+The limits are compared on integers (parts per million) wherever the quantity is a count, so
+that a value exactly on a limit (1 pixel in 1000 at 99.9%) passes, as "at least" says.
+
+The specification leaves some points open. `cert compare` reads them as below, and they are
+questions for NIST, to settle with the answers to the certification questions (issue #17)
+before a submission; no threshold depends on them, only what is counted:
+
+1. **Absolute value.** The formulas of AA.2 items 1 and 2 are printed without absolute-value
+   bars, while the text says "within". They are read as the absolute relative difference.
+2. **"Excluding comments".** Taken as the whole COM segments: the marker, the length and the
+   payload. The specification does not define the term.
+3. **Population of the bin indices.** Taken as the coefficients of all 60 subbands, so a subband
+   a stream drops (`Q = 0`) counts its coefficients as zeros; a subband dropped on one side only
+   compares the other side's nonzero indices with zero.
+4. **A subband dropped on one side only.** Its width is zero against a width that is not, which
+   is within no relative limit: the bin-width requirement fails. A subband both streams drop has
+   nothing to compare.
+5. **"Reconstructed values".** Taken as the 8-bit pixels of the `.pgm` files the submission
+   holds, not the floating-point values before rounding.
+
+Not checked, because Annex AA gives no accuracy limit for it: the syntax tests of the
+interchange and abbreviated formats (Part 2, section 3), `Ev = 2` and the implementation number
+(Part 3).
 
 The same values are available to other tools through `wsq_codec::inspect::read_quantized`.
 

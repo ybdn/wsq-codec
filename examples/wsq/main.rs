@@ -16,6 +16,7 @@
 //! writes the WSQ streams inside a file next to it. `cert` runs the FBI
 //! certification tests locally (see `cert.rs` and docs/certification.md).
 
+mod accuracy;
 mod cert;
 mod corpus;
 
@@ -63,8 +64,9 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         [cmd, dir] if cmd == "check" => corpus::check(Path::new(dir))?,
         [cmd, file] if cmd == "extract" => corpus::extract(Path::new(file))?,
         [cmd, rest @ ..] if cmd == "cert" => {
-            if !cert::run(rest)? {
-                process::exit(2);
+            let outcome = cert::run(rest)?;
+            if outcome != cert::Outcome::Done {
+                process::exit(outcome.code());
             }
         }
         _ => {
