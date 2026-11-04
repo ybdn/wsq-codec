@@ -25,54 +25,68 @@ pub(crate) struct QuantParams {
     pub qzbs: [f32; Q_TREE_LEN],
 }
 
-/// Variance of a `lenx` by `leny` window of the image at (`x`, `y`).
-fn window_variance(
-    data: &[f32],
-    width: usize,
-    x: usize,
-    y: usize,
-    lenx: usize,
-    leny: usize,
-) -> f32 {
+/// Variance of a subband, over the whole subband or over the central
+/// window the specification prescribes, and the largest magnitude of its
+/// coefficients, over the whole subband, in one pass. The window is empty
+/// for subbands of images below the encoder's minimum size.
+///
+/// The sums run row by row, left to right, over the window only, as in
+/// the reference implementation.
+fn subband_stats(data: &[f32], width: usize, node: &QNode, cropped: bool) -> (f32, f32) {
+    let (skipx, skipy, lenx, leny) = if cropped {
+        (
+            node.lenx / 8,
+            (9 * node.leny) / 32,
+            (3 * node.lenx) / 4,
+            (7 * node.leny) / 16,
+        )
+    } else {
+        (0, 0, node.lenx, node.leny)
+    };
     let mut sum = 0.0f32;
     let mut ssq = 0.0f32;
-    for row in y..y + leny {
-        for &v in &data[row * width + x..row * width + x + lenx] {
-            sum += v;
-            ssq += v * v;
+    let mut largest = 0.0f32;
+    for (i, row) in (node.y..node.y + node.leny).enumerate() {
+        let line = &data[row * width + node.x..row * width + node.x + node.lenx];
+        largest = line.iter().fold(largest, |m, &v| m.max(v.abs()));
+        if (skipy..skipy + leny).contains(&i) {
+            for &v in &line[skipx..skipx + lenx] {
+                sum += v;
+                ssq += v * v;
+            }
         }
     }
     let n = lenx * leny;
     let sum2 = (sum * sum) / n as f32;
-    (f64::from(ssq - sum2) / (n as f64 - 1.0)) as f32
+    let var = (f64::from(ssq - sum2) / (n as f64 - 1.0)) as f32;
+    (var, largest)
 }
 
-/// Variance of a subband, either over the whole subband or over the
-/// central window the specification prescribes. The window is empty for
-/// subbands of images below the encoder's minimum size.
-fn subband_variance(data: &[f32], width: usize, node: &QNode, cropped: bool) -> f32 {
-    if cropped {
-        let skipx = node.lenx / 8;
-        let skipy = (9 * node.leny) / 32;
-        let lenx = (3 * node.lenx) / 4;
-        let leny = (7 * node.leny) / 16;
-        window_variance(data, width, node.x + skipx, node.y + skipy, lenx, leny)
-    } else {
-        window_variance(data, width, node.x, node.y, node.lenx, node.leny)
-    }
+/// Statistics of the 60 subbands of a transformed image, as
+/// [`variances`] gives them.
+pub(crate) struct Stats {
+    /// Variance per subband, as the bit allocation uses it.
+    pub var: [f32; Q_TREE_LEN],
+    /// Largest coefficient magnitude per subband.
+    pub largest: [f32; Q_TREE_LEN],
 }
 
-/// Variances of the 60 subbands of a transformed image.
+/// Variances and largest magnitudes of the 60 subbands of a transformed
+/// image, on up to `threads` threads. Each subband is computed on one
+/// thread exactly as on a single one, so the result does not depend on
+/// the threads.
 pub(crate) fn variances(
     data: &[f32],
     width: usize,
     q_tree: &[QNode; Q_TREE_LEN],
-) -> [f32; Q_TREE_LEN] {
+    threads: usize,
+) -> Stats {
     let mut var = [0.0f32; Q_TREE_LEN];
+    let mut largest = [0.0f32; Q_TREE_LEN];
     let mut vsum = 0.0f32;
-    for (v, node) in var.iter_mut().zip(q_tree).take(4) {
-        *v = subband_variance(data, width, node, true);
-        vsum += *v;
+    for (cnt, node) in q_tree.iter().enumerate().take(4) {
+        (var[cnt], largest[cnt]) = subband_stats(data, width, node, true);
+        vsum += var[cnt];
     }
     // Images with little energy in the lowest bands use whole subbands.
     let (from, cropped) = if vsum < 20000.0 {
@@ -80,10 +94,17 @@ pub(crate) fn variances(
     } else {
         (4, true)
     };
-    for (v, node) in var.iter_mut().zip(q_tree).take(NUM_SUBBANDS).skip(from) {
-        *v = subband_variance(data, width, node, cropped);
+    // Largest subbands first, so that the threads finish together.
+    let mut order: Vec<usize> = (0..NUM_SUBBANDS - from).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(q_tree[from + i].area()));
+    let total = q_tree[from..NUM_SUBBANDS].iter().map(QNode::area).sum();
+    let stats = par::map_dynamic(&order, par::parts(threads, total), |i| {
+        subband_stats(data, width, &q_tree[from + i], cropped)
+    });
+    for (i, (v, m)) in stats.into_iter().enumerate() {
+        (var[from + i], largest[from + i]) = (v, m);
     }
-    var
+    Stats { var, largest }
 }
 
 /// Chooses the bin widths that spend about `bitrate` bits per pixel.
@@ -168,21 +189,12 @@ const MAX_QUANTIZED: f32 = 32000.0;
 /// down to zero when the proportionality constant overflows. The
 /// reference implementation then wraps coefficients around or drops every
 /// subband and decodes a flat image. On other images this changes nothing.
-pub(crate) fn limit_bin_widths(
-    params: &mut QuantParams,
-    var: &[f32; Q_TREE_LEN],
-    data: &[f32],
-    width: usize,
-    q_tree: &[QNode; Q_TREE_LEN],
-) {
-    for (cnt, node) in q_tree.iter().enumerate().take(NUM_SUBBANDS) {
-        if var[cnt] < VARIANCE_THRESH {
+pub(crate) fn limit_bin_widths(params: &mut QuantParams, stats: &Stats) {
+    for cnt in 0..NUM_SUBBANDS {
+        if stats.var[cnt] < VARIANCE_THRESH {
             continue;
         }
-        let largest = (node.y..node.y + node.leny)
-            .flat_map(|row| &data[row * width + node.x..row * width + node.x + node.lenx])
-            .fold(0.0f32, |m, &v| m.max(v.abs()));
-        let narrowest = largest / MAX_QUANTIZED;
+        let narrowest = stats.largest[cnt] / MAX_QUANTIZED;
         #[allow(clippy::neg_cmp_op_on_partial_ord)] // also catches NaN
         if !(params.qbss[cnt] >= narrowest) {
             params.qbss[cnt] = narrowest;
@@ -286,35 +298,89 @@ impl QuantTable {
 }
 
 /// Turns quantized coefficients back into a transformed image. `coeffs`
-/// holds [`QuantTable::coefficient_count`] coefficients.
+/// holds [`QuantTable::coefficient_count`] coefficients; missing ones
+/// count as zero.
 pub(crate) fn unquantize(
     coeffs: &[i16],
     table: &QuantTable,
     width: usize,
     height: usize,
     q_tree: &[QNode; Q_TREE_LEN],
+    threads: usize,
 ) -> Vec<f32> {
     let mut data = vec![0.0f32; width * height];
-    let mut coeffs = coeffs;
-    let c = table.bin_center;
+    unquantize_into(coeffs, table, width, q_tree, &mut data, threads);
+    data
+}
+
+/// [`unquantize`] into `data`, which holds `width * height` samples and
+/// is overwritten whatever it holds, on up to `threads` threads.
+///
+/// Each sample depends on its own coefficient only, so the image is cut
+/// into bands of rows, one per thread, each filled row by row.
+pub(crate) fn unquantize_into(
+    coeffs: &[i16],
+    table: &QuantTable,
+    width: usize,
+    q_tree: &[QNode; Q_TREE_LEN],
+    data: &mut [f32],
+    threads: usize,
+) {
+    /// A kept subband and where its coefficients start.
+    struct Kept<'a> {
+        node: &'a QNode,
+        start: usize,
+        qbin: f32,
+        half_z: f64,
+    }
+    let mut kept = Vec::new();
+    let mut start = 0;
     for (cnt, node) in q_tree.iter().enumerate().take(NUM_SUBBANDS) {
         let qbin = table.q_bin[cnt];
         if qbin == 0.0 {
             continue;
         }
-        let half_z = f64::from(table.z_bin[cnt]) / 2.0;
-        for row in node.y..node.y + node.leny {
-            let (line, rest) = coeffs.split_at(node.lenx.min(coeffs.len()));
-            coeffs = rest;
-            let out = &mut data[row * width + node.x..row * width + node.x + node.lenx];
-            for (out, &s) in out.iter_mut().zip(line) {
-                *out = match s.signum() {
-                    0 => 0.0,
-                    1 => (f64::from(qbin * (f32::from(s) - c)) + half_z) as f32,
-                    _ => (f64::from(qbin * (f32::from(s) + c)) - half_z) as f32,
-                };
+        kept.push(Kept {
+            node,
+            start,
+            qbin,
+            half_z: f64::from(table.z_bin[cnt]) / 2.0,
+        });
+        start += node.area();
+    }
+    let c = table.bin_center;
+    let fill = |first_row: usize, rows: &mut [f32]| {
+        for (i, line) in rows.chunks_mut(width).enumerate() {
+            let row = first_row + i;
+            line.fill(0.0);
+            for k in kept
+                .iter()
+                .filter(|k| (k.node.y..k.node.y + k.node.leny).contains(&row))
+            {
+                let (node, qbin, half_z) = (k.node, k.qbin, k.half_z);
+                let from = (k.start + (row - node.y) * node.lenx).min(coeffs.len());
+                let to = (from + node.lenx).min(coeffs.len());
+                let out = &mut line[node.x..node.x + node.lenx];
+                for (out, &s) in out.iter_mut().zip(&coeffs[from..to]) {
+                    *out = match s.signum() {
+                        0 => 0.0,
+                        1 => (f64::from(qbin * (f32::from(s) - c)) + half_z) as f32,
+                        _ => (f64::from(qbin * (f32::from(s) + c)) - half_z) as f32,
+                    };
+                }
             }
         }
+    };
+    let height = data.len().checked_div(width).unwrap_or(0);
+    let parts = par::parts(threads, data.len());
+    if parts == 1 {
+        return fill(0, data);
     }
-    data
+    let band = height.div_ceil(parts);
+    let fill = &fill;
+    std::thread::scope(|scope| {
+        for (i, rows) in data.chunks_mut(band * width).enumerate() {
+            drop(par::spawn(scope, move || fill(i * band, rows)));
+        }
+    });
 }

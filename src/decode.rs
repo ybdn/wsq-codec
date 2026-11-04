@@ -221,9 +221,9 @@ pub(crate) fn decode(data: &[u8], options: &DecodeOptions) -> Result<Image, Deco
         coeffs,
     } = read_quantized(data, options)?;
     let (width, height) = (info.width, info.height);
-    let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q);
-    drop(coeffs);
     let threads = crate::thread_count(options.threads);
+    let mut data = quant::unquantize(&coeffs, &quant, width, height, &trees.q, threads);
+    drop(coeffs);
     wavelet::reconstruct(
         &mut data,
         width,

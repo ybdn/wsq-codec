@@ -89,6 +89,44 @@ pub(crate) fn zip_chunks<A: Sync, B: Send>(
     });
 }
 
+/// Returns `f(i)` for every `i` in `order`, a permutation of `0..n`, on
+/// up to `parts` threads, as a vector indexed by `i`. The threads take the
+/// items one at a time in the given order, so listing the largest first
+/// balances uneven items. Each result depends on its item only, so the
+/// output does not depend on the threads.
+pub(crate) fn map_dynamic<R: Send>(
+    order: &[usize],
+    parts: usize,
+    f: impl Fn(usize) -> R + Sync,
+) -> Vec<R> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let worker = || {
+        let mut done = Vec::new();
+        loop {
+            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(&i) = order.get(k) else { break };
+            done.push((i, f(i)));
+        }
+        done
+    };
+    let mut out: Vec<Option<R>> = order.iter().map(|_| None).collect();
+    std::thread::scope(|scope| {
+        let tasks: Vec<_> = (1..parts).map(|_| spawn(scope, worker)).collect();
+        let mut merge = |done: Vec<(usize, R)>| {
+            for (i, r) in done {
+                out[i] = Some(r);
+            }
+        };
+        merge(worker());
+        for task in tasks {
+            merge(task.join());
+        }
+    });
+    out.into_iter()
+        .map(|r| r.expect("every item is mapped"))
+        .collect()
+}
+
 /// Runs three independent jobs, on three threads when `parallel` is set,
 /// and returns their results in order.
 pub(crate) fn run3<T: Send>(
@@ -133,8 +171,12 @@ mod tests {
     }
 
     #[test]
-    fn run3_and_zip_chunks_survive_refused_threads() {
+    fn helpers_survive_refused_threads() {
         assert_eq!(without_threads(|| run3(true, || 1, || 2, || 3)), (1, 2, 3));
+        let order = [2, 0, 3, 1];
+        let squares = [0, 1, 4, 9];
+        assert_eq!(map_dynamic(&order, 3, |i| i * i), squares);
+        assert_eq!(without_threads(|| map_dynamic(&order, 3, |i| i * i)), squares);
         let src: Vec<u32> = (0..MIN_ITEMS as u32 * 3).collect();
         let mut dst = vec![0; src.len()];
         without_threads(|| {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- With several threads, dequantization and the encoder's subband variances run in parallel; the
+  largest-magnitude scan that bounds the bin widths shares the variance pass. Output unchanged.
 - The benchmark images are generated with integer arithmetic only, and `benches/hashes.txt` is
   recorded again from them (checked on Linux x86-64 with 1, 0 and 3 threads). CI runs
   `--check` on Linux, macOS and Windows.

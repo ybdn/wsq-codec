@@ -73,9 +73,9 @@ pub(crate) fn encode(
     let trees = Trees::new(width, height);
     wavelet::decompose(&mut data, width, &trees.w, threads);
 
-    let var = quant::variances(&data, width, &trees.q);
-    let mut params = quant::bin_widths(&var, bitrate);
-    quant::limit_bin_widths(&mut params, &var, &data, width, &trees.q);
+    let stats = quant::variances(&data, width, &trees.q, threads);
+    let mut params = quant::bin_widths(&stats.var, bitrate);
+    quant::limit_bin_widths(&mut params, &stats);
     let coeffs = quant::quantize(&data, width, &trees.q, &params, threads);
     drop(data);
 
