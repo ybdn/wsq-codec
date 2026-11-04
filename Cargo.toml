@@ -33,6 +33,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 name = "codec"
 harness = false
 
+[[bench]]
+name = "quality"
+harness = false
+
 # The accuracy requirements of `cert compare` have unit tests.
 [[example]]
 name = "wsq"
