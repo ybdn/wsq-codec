@@ -1,8 +1,22 @@
 # wsq-codec
 
+[![CI](https://github.com/ybdn/wsq-codec/actions/workflows/ci.yml/badge.svg)](https://github.com/ybdn/wsq-codec/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/wsq-codec.svg)](https://crates.io/crates/wsq-codec)
+[![docs.rs](https://img.shields.io/docsrs/wsq-codec)](https://docs.rs/wsq-codec)
+[![license: MIT](https://img.shields.io/crates/l/wsq-codec.svg)](LICENSE)
+[![MSRV: 1.85](https://img.shields.io/badge/MSRV-1.85-blue.svg)](Cargo.toml)
+
 Rust decoder and encoder for **WSQ** (Wavelet Scalar Quantization) fingerprint images, the
 compression the FBI specifies (IAFIS-IC-0110, version 3.1) and that ANSI/NIST-ITL transactions
 carry in Types 4 and 14.
+
+> **Not affiliated, not certified.** This project is not affiliated with or endorsed by the FBI
+> or NIST, and the crate is not certified by the FBI. [docs/certification.md](docs/certification.md)
+> gives the status.
+
+> **No real fingerprints in issues.** Fingerprints are biometric data, a special category under
+> GDPR article 9. Never attach them to an issue or a pull request: see
+> [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 - Pure Rust, no dependencies (an optional `image` integration aside), no `unsafe`.
 - Matches NIST's reference implementation (NBIS): decoding gives the same pixels, and encoding
@@ -150,6 +164,12 @@ The work stays on the calling thread unless `EncodeOptions::threads` or
 by rows and by columns, quantization by subbands, and the conversions between pixels and
 floats by chunks; each value goes through the same arithmetic either way, so the result is
 unchanged. Huffman coding stays on one thread. Threads pay off on large images only.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks to run and the branch flow, and
+[SECURITY.md](SECURITY.md) to report a vulnerability privately. Participation is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
