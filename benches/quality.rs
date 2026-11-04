@@ -4,7 +4,7 @@
 //! ```text
 //! cargo bench --bench quality -- [--rates 0.5,0.75,1.0,2.25] [--runs N] [--threads N]
 //!                                [--large] [--csv FILE] [--export DIR]
-//!                                [--nbis BIN_DIR | --nbis-streams DIR]
+//!                                [--nbis BIN_DIR | --nbis-streams DIR] [--optimized]
 //! ```
 //!
 //! The images are generated with integer arithmetic only (the same generator as
@@ -35,6 +35,13 @@
 //! In both, the conformant encoder is expected to match NBIS byte for byte: a difference in the
 //! stream or in the reconstruction is reported and makes the run fail. Without `--nbis*`
 //! nothing is judged.
+//!
+//! `--optimized` also measures the experimental encoder of #42
+//! (`wsq_codec::experimental::encode_at_rate`), which scales the bin widths to hit the requested
+//! rate, and the conformant encoder at equal size: the requested rate that makes the conformant
+//! stream closest in length to the optimized one, found by bisection. With `--nbis`, NBIS's
+//! `dwsq` decodes every optimized stream too, and a reconstruction that differs from this
+//! crate's makes the run fail.
 //!
 //! The table goes to the standard output; `--csv FILE` also writes every measurement as CSV.
 
@@ -252,6 +259,16 @@ struct Nbis {
     same_pixels: bool,
 }
 
+/// The experimental encoder against the conformant one at equal size.
+struct Optimized {
+    measure: Measure,
+    /// Requested rate that gives the conformant stream closest in length.
+    equal_rate: f32,
+    equal: Measure,
+    /// Whether NBIS's `dwsq` gives the same pixels, when it ran.
+    nbis_pixels: Option<bool>,
+}
+
 struct Row {
     image: String,
     width: usize,
@@ -260,6 +277,7 @@ struct Row {
     target: f64,
     ours: Measure,
     nbis: Option<Nbis>,
+    optimized: Option<Optimized>,
 }
 
 enum Mode {
@@ -278,6 +296,7 @@ struct Args {
     csv: Option<PathBuf>,
     export: Option<PathBuf>,
     mode: Mode,
+    optimized: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, Box<dyn Error>> {
@@ -289,6 +308,7 @@ fn parse_args(args: &[String]) -> Result<Args, Box<dyn Error>> {
         csv: None,
         export: None,
         mode: Mode::None,
+        optimized: false,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -299,6 +319,7 @@ fn parse_args(args: &[String]) -> Result<Args, Box<dyn Error>> {
         match arg.as_str() {
             "--bench" => {} // added by cargo
             "--large" => out.large = true,
+            "--optimized" => out.optimized = true,
             "--rates" => {
                 out.rates = value("--rates")?.split(',').map(String::from).collect();
             }
@@ -370,6 +391,59 @@ fn nbis_run(
     )?;
     let recon = fs::read(dir.join(format!("{}.raw", src.name)))?;
     Ok((stream, recon))
+}
+
+/// Reconstruction of `stream` by NBIS's `dwsq`.
+fn nbis_decode(
+    bin: &Path,
+    work: &Path,
+    name: &str,
+    stream: &[u8],
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let dir = work.join("optimized");
+    fs::create_dir_all(&dir)?;
+    let wsq = dir.join(format!("{name}.wsq"));
+    fs::write(&wsq, stream)?;
+    nbis_tool(
+        bin,
+        "dwsq",
+        &["raw".as_ref(), wsq.as_os_str(), "-raw_out".as_ref()],
+    )?;
+    let raw = dir.join(format!("{name}.raw"));
+    let recon = fs::read(&raw)?;
+    fs::remove_file(&raw)?;
+    fs::remove_file(&wsq)?;
+    Ok(recon)
+}
+
+/// The requested rate whose conformant stream is closest in length to `len` bytes, by bisection
+/// on the logarithm of the rate, and that stream.
+fn equal_size(
+    src: &Source,
+    len: usize,
+    options: impl Fn(f32) -> EncodeOptions,
+) -> Result<(f32, Vec<u8>), Box<dyn Error>> {
+    let encode = |rate: f32| wsq_codec::encode(&src.pixels, src.width, src.height, &options(rate));
+    let target = len as f64 * 8.0 / (src.width * src.height) as f64;
+    let (mut lo, mut hi) = ((target / 64.0).ln(), (target * 64.0).ln());
+    let mut best: Option<(f32, Vec<u8>)> = None;
+    for _ in 0..40 {
+        let mid = (lo + hi) / 2.0;
+        let rate = mid.exp() as f32;
+        let wsq = encode(rate)?;
+        if best
+            .as_ref()
+            .is_none_or(|b| wsq.len().abs_diff(len) < b.1.len().abs_diff(len))
+        {
+            best = Some((rate, wsq.clone()));
+        }
+        match wsq.len().cmp(&len) {
+            std::cmp::Ordering::Less => lo = mid,
+            std::cmp::Ordering::Greater => hi = mid,
+            std::cmp::Ordering::Equal => break,
+        }
+    }
+    Ok(best.expect("at least one try"))
 }
 
 fn pgm(src: &Source) -> Vec<u8> {
@@ -461,6 +535,39 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                     same_pixels: recon == image.pixels,
                     measure: measure(src, stream.len(), &recon, None),
                 });
+                let optimized = if args.optimized {
+                    let (enc, wsq) = fastest(args.runs, || {
+                        wsq_codec::experimental::encode_at_rate(
+                            &src.pixels,
+                            src.width,
+                            src.height,
+                            &options,
+                        )
+                    });
+                    let wsq = wsq?;
+                    let (dec, image) =
+                        fastest(args.runs, || wsq_codec::decode_with(&wsq, &decode_options));
+                    let image = image?;
+                    let times = Some((enc.as_secs_f64() * 1e3, dec.as_secs_f64() * 1e3));
+                    let opt = measure(src, wsq.len(), &image.pixels, times);
+                    let (equal_rate, equal_wsq) = equal_size(src, wsq.len(), encode_options)?;
+                    let equal_pixels = wsq_codec::decode_with(&equal_wsq, &decode_options)?.pixels;
+                    let nbis_pixels = match &args.mode {
+                        Mode::Run(bin) => Some(
+                            nbis_decode(bin, &work, &format!("{}_{rate}", src.name), &wsq)?
+                                == image.pixels,
+                        ),
+                        _ => None,
+                    };
+                    Some(Optimized {
+                        measure: opt,
+                        equal_rate,
+                        equal: measure(src, equal_wsq.len(), &equal_pixels, None),
+                        nbis_pixels,
+                    })
+                } else {
+                    None
+                };
                 rows.push(Row {
                     image: src.name.clone(),
                     width: src.width,
@@ -469,6 +576,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                     target: f64::from(target),
                     ours,
                     nbis,
+                    optimized,
                 });
             }
         }
@@ -478,12 +586,23 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     result?;
 
     print_tables(&rows, &args);
+    print_optimized(&rows);
     if let Some(path) = &args.csv {
         let mut csv = String::from(
-            "source,image,width,height,rate,target_bpp,bytes,bpp,psnr_db,ssim,encode_ms,decode_ms,identical_to_crate\n",
+            "source,image,width,height,rate,target_bpp,bytes,bpp,psnr_db,ssim,encode_ms,decode_ms,identical_to_crate,requested_bpp\n",
         );
         for row in &rows {
             writeln!(csv, "{}", csv_line(row, "wsq-codec", &row.ours, None))?;
+            if let Some(o) = &row.optimized {
+                writeln!(
+                    csv,
+                    "{}",
+                    csv_line(row, "wsq-codec-optimized", &o.measure, o.nbis_pixels)
+                )?;
+                let mut equal = csv_line(row, "wsq-codec-equal-size", &o.equal, None);
+                write!(equal, ",{}", o.equal_rate)?;
+                writeln!(csv, "{equal}")?;
+            }
             if let Some(n) = &row.nbis {
                 writeln!(
                     csv,
@@ -507,8 +626,19 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                 .is_some_and(|n| !(n.same_stream && n.same_pixels))
         })
         .count();
+    let unreadable = rows
+        .iter()
+        .filter(|r| {
+            r.optimized
+                .as_ref()
+                .is_some_and(|o| o.nbis_pixels == Some(false))
+        })
+        .count();
     if differing > 0 {
         return Err(format!("{differing} measurement(s) differ from NBIS").into());
+    }
+    if unreadable > 0 {
+        return Err(format!("NBIS decodes {unreadable} optimized stream(s) differently").into());
     }
     Ok(())
 }
@@ -587,6 +717,91 @@ fn print_tables(rows: &[Row], args: &Args) {
         println!(
             "| {target} | {} | {bpp:.4} | {dev:+.1}% | {mean_psnr:.2} | {mean_ssim:.4} |",
             group.len()
+        );
+    }
+}
+
+fn print_optimized(rows: &[Row]) {
+    let rows: Vec<(&Row, &Optimized)> = rows
+        .iter()
+        .filter_map(|r| r.optimized.as_ref().map(|o| (r, o)))
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let nbis = rows.iter().any(|(_, o)| o.nbis_pixels.is_some());
+    println!(
+        "\nExperimental encoder (#42), and the conformant encoder at the requested rate that gives \
+         the closest size:\n"
+    );
+    print!(
+        "| image | target bpp | bytes | actual bpp | deviation | PSNR dB | SSIM | encode ms | \
+         equal-size requested bpp | its bytes | its PSNR dB | its SSIM | PSNR diff dB |"
+    );
+    println!("{}", if nbis { " NBIS dwsq |" } else { "" });
+    print!("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    println!("{}", if nbis { "---|" } else { "" });
+    for (r, o) in &rows {
+        let m = &o.measure;
+        print!(
+            "| {}, {}×{} | {} | {} | {:.4} | {:+.2}% | {} | {:.4} | {:.1} | {:.4} | {} | {} | {:.4} | {:+.2} |",
+            r.image,
+            r.width,
+            r.height,
+            r.rate,
+            m.bytes,
+            m.bpp,
+            (m.bpp - r.target) / r.target * 100.0,
+            fmt_psnr(m.psnr),
+            m.ssim,
+            m.times.unwrap_or_default().0,
+            o.equal_rate,
+            o.equal.bytes,
+            fmt_psnr(o.equal.psnr),
+            o.equal.ssim,
+            m.psnr - o.equal.psnr,
+        );
+        if let Some(same) = o.nbis_pixels {
+            print!(" {} |", if same { "identical" } else { "DIFFERENT" });
+        }
+        println!();
+    }
+
+    let mut by_rate: BTreeMap<u32, Vec<(&Row, &Optimized)>> = BTreeMap::new();
+    for &(r, o) in &rows {
+        by_rate
+            .entry((r.target * 1e4) as u32)
+            .or_default()
+            .push((r, o));
+    }
+    println!("\nPer requested rate, over the images:\n");
+    println!(
+        "| target bpp | images | mean actual bpp | deviation, min / max | mean PSNR dB | \
+         mean PSNR diff at equal size dB | mean SSIM diff | encode time / conformant |"
+    );
+    println!("|---|---|---|---|---|---|---|---|");
+    for group in by_rate.values() {
+        let n = group.len() as f64;
+        let target = group[0].0.target;
+        let mean = |f: &dyn Fn(&Row, &Optimized) -> f64| {
+            group.iter().map(|(r, o)| f(r, o)).sum::<f64>() / n
+        };
+        let devs: Vec<f64> = group
+            .iter()
+            .map(|(r, o)| (o.measure.bpp - r.target) / r.target * 100.0)
+            .collect();
+        let min = devs.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = devs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let time = |m: &Measure| m.times.unwrap_or_default().0;
+        println!(
+            "| {target} | {} | {:.4} | {min:+.2}% / {max:+.2}% | {:.2} | {:+.3} | {:+.4} | {:.2} |",
+            group.len(),
+            mean(&|_, o| o.measure.bpp),
+            mean(&|_, o| o.measure.psnr),
+            mean(&|_, o| o.measure.psnr - o.equal.psnr),
+            mean(&|_, o| o.measure.ssim - o.equal.ssim),
+            group.iter().map(|(_, o)| time(&o.measure)).sum::<f64>()
+                / group.iter().map(|(r, _)| time(&r.ours)).sum::<f64>(),
         );
     }
 }
