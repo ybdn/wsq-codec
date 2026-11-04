@@ -5,10 +5,12 @@
 //! commands produce the files a submission holds and compare them with
 //! NIST's references before anything is sent:
 //!
-//! - `cert encode IN OUT [--software N] [--ppi N]` encodes every `.pgm` in
-//!   `IN` at both certification rates, into `OUT/0.75/` and `OUT/2.25/`,
-//!   and writes `OUT/submission.txt`, the description of the platform the
-//!   submission asks for, to be completed by hand.
+//! - `cert encode IN OUT [--software N] [--ppi N] [--compiler TEXT]` encodes
+//!   every `.pgm` in `IN` at both certification rates, into `OUT/0.75/` and
+//!   `OUT/2.25/`, and writes `OUT/submission.txt`, the description of the
+//!   platform the submission asks for, to be completed by hand. The
+//!   compiler is never guessed: pass the output of `rustc -vV` run with the
+//!   toolchain that built this binary, or fill the line in by hand.
 //! - `cert decode IN OUT` decodes every `.wsq` under `IN` into a binary
 //!   PGM (P5) at the same relative path under `OUT`.
 //! - `cert compare OURS REF` compares, for every `.wsq` under `REF`, the
@@ -39,6 +41,7 @@ pub fn run(args: &[String]) -> Result<bool, Box<dyn Error>> {
         [cmd, input, output, flags @ ..] if cmd == "encode" => {
             let mut software = 0;
             let mut ppi = None;
+            let mut compiler = None;
             let mut flags = flags.iter();
             while let Some(flag) = flags.next() {
                 let value = flags
@@ -47,10 +50,17 @@ pub fn run(args: &[String]) -> Result<bool, Box<dyn Error>> {
                 match flag.as_str() {
                     "--software" => software = value.parse()?,
                     "--ppi" => ppi = Some(value.parse()?),
+                    "--compiler" => compiler = Some(value.clone()),
                     _ => return Err(format!("unknown option {flag}").into()),
                 }
             }
-            encode(Path::new(input), Path::new(output), software, ppi)?;
+            encode(
+                Path::new(input),
+                Path::new(output),
+                software,
+                ppi,
+                compiler.as_deref(),
+            )?;
             Ok(true)
         }
         [cmd, input, output] if cmd == "decode" => {
@@ -61,7 +71,7 @@ pub fn run(args: &[String]) -> Result<bool, Box<dyn Error>> {
             compare(Path::new(ours), Path::new(reference))
         }
         _ => Err("usage: wsq cert encode IN OUT [--software N] [--ppi N] \
-                  | cert decode IN OUT | cert compare OURS REF"
+                  [--compiler TEXT] | cert decode IN OUT | cert compare OURS REF"
             .into()),
     }
 }
@@ -101,6 +111,7 @@ fn encode(
     output: &Path,
     software: u16,
     ppi: Option<u32>,
+    compiler: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let images = files(input, "pgm")?;
     if images.is_empty() {
@@ -130,7 +141,7 @@ fn encode(
         println!("{}: {width}x{height}", rel.display());
     }
     let sheet = output.join("submission.txt");
-    fs::write(&sheet, submission_sheet(software))?;
+    fs::write(&sheet, submission_sheet(software, compiler))?;
     println!(
         "{} images encoded at {} rates; complete {}",
         images.len(),
@@ -141,14 +152,17 @@ fn encode(
 }
 
 /// The plain text description a submission includes, with what can be
-/// detected filled in.
-fn submission_sheet(software: u16) -> String {
-    let rustc = std::process::Command::new("rustc")
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map_or_else(|| "(fill in)".to_string(), |s| s.trim().to_string());
+/// detected filled in. The compiler is only what the caller states: the
+/// `rustc` on the `PATH` is not necessarily the one that built this binary.
+fn submission_sheet(software: u16, compiler: Option<&str>) -> String {
+    let compiler = compiler.map_or_else(
+        || {
+            "(fill in: `rustc -vV` of the toolchain that built the tested binary, \
+             or pass --compiler)"
+                .to_string()
+        },
+        |c| c.trim().replace('\n', "\n                           "),
+    );
     let mut s = String::new();
     let _ = writeln!(s, "WSQ certification submission");
     let _ = writeln!(s);
@@ -179,7 +193,7 @@ fn submission_sheet(software: u16) -> String {
     );
     let _ = writeln!(s, "Hardware:                  (fill in: CPU model)");
     let _ = writeln!(s, "Operating system version:  (fill in)");
-    let _ = writeln!(s, "Compiler:                  {rustc}");
+    let _ = writeln!(s, "Compiler:                  {compiler}");
     s
 }
 
