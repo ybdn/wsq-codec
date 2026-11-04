@@ -70,17 +70,17 @@ pub(crate) fn encode(
     }
 
     let threads = crate::thread_count(options.threads);
-    let data = wavelet::buffer(&mut scratch.image, pixels.len());
+    let data = wavelet::buffer(&mut scratch.image, pixels.len())?;
     let (m_shift, r_scale) = normalize(pixels, data, threads);
     let trees = Trees::new(width, height);
-    let tmp = wavelet::buffer(&mut scratch.tmp, pixels.len());
+    let tmp = wavelet::buffer(&mut scratch.tmp, pixels.len())?;
     wavelet::decompose(data, tmp, width, &trees.w, threads);
     wavelet::release(&mut scratch.tmp, scratch.keep);
 
     let stats = quant::variances(data, width, &trees.q, threads);
     let mut params = quant::bin_widths(&stats.var, bitrate);
     quant::limit_bin_widths(&mut params, &stats);
-    let coeffs = quant::quantize(data, width, &trees.q, &params, threads);
+    let coeffs = quant::quantize(data, width, &trees.q, &params, threads)?;
     wavelet::release(&mut scratch.image, scratch.keep);
 
     // The coefficients of each block, in subband order.

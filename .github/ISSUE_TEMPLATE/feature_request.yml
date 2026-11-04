@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an addition or a change
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach real fingerprints.** They are biometric data, a special category under
+        GDPR article 9. Use synthetic images, or describe the stream with the output of
+        `wsq info FILE`.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem or need
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

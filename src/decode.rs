@@ -1,6 +1,7 @@
 use crate::bits::ByteReader;
 use crate::error::DecodeError;
 use crate::huffman::{DecodeTable, HuffmanSpec, Item};
+use crate::mem::{self, OutOfMemory};
 use crate::quant::{self, QuantTable};
 use crate::tables::{
     self, COM, DHT, DQT, DTT, EOI, FrameHeader, MAX_DHT_TABLES, SOB, SOF, SOI, TransformTable,
@@ -112,6 +113,9 @@ fn read_block(
                 if coeffs.len() >= max {
                     return Err(too_many);
                 }
+                if coeffs.len() == coeffs.capacity() {
+                    grow(coeffs, 1)?;
+                }
                 coeffs.push(c);
             }
             Item::Zeros(n) => {
@@ -119,6 +123,7 @@ fn read_block(
                 if coeffs.len() + n > max {
                     return Err(too_many);
                 }
+                grow(coeffs, n)?;
                 coeffs.resize(coeffs.len() + n, 0);
             }
             Item::End(marker) => return Ok(marker),
@@ -172,6 +177,12 @@ fn decode_blocks(blocks: &[Block<'_>], threads: usize) -> Option<Vec<Vec<i16>>> 
         }
     }
     decoded.into_iter().collect()
+}
+
+/// Makes room for `additional` more coefficients, growing `coeffs` by
+/// doubling as `push` does, but failing instead of aborting.
+fn grow(coeffs: &mut Vec<i16>, additional: usize) -> Result<(), OutOfMemory> {
+    coeffs.try_reserve(additional).map_err(|_| OutOfMemory)
 }
 
 /// A stream read up to its quantized coefficients.
@@ -277,6 +288,9 @@ fn read_quantized_with(
             });
             marker = end;
         } else {
+            // Once for all blocks, instead of the doubling of `push`.
+            let missing = max.saturating_sub(coeffs.len());
+            mem::reserve(&mut coeffs, missing)?;
             marker = read_block(&mut r, &table, &mut coeffs, max)?;
         }
     }
@@ -318,9 +332,9 @@ pub(crate) fn decode(
     let quantized = read_quantized(data, options)?;
     let mut pixels = Vec::new();
     let info = render(quantized, options, scratch, |n| {
-        pixels = vec![0u8; n];
-        &mut pixels
-    });
+        pixels = mem::filled(n, 0u8)?;
+        Ok(&mut pixels)
+    })?;
     Ok(Image {
         width: info.width,
         height: info.height,
@@ -343,7 +357,7 @@ pub(crate) fn decode_into(
             actual: out.len(),
         });
     }
-    Ok(render(quantized, options, scratch, |_| out))
+    render(quantized, options, scratch, |_| Ok(out))
 }
 
 /// Dequantizes and transforms back, then writes the pixels into the
@@ -352,8 +366,8 @@ fn render<'o>(
     quantized: Quantized,
     options: &DecodeOptions,
     scratch: &mut wavelet::Scratch,
-    output: impl FnOnce(usize) -> &'o mut [u8],
-) -> Info {
+    output: impl FnOnce(usize) -> Result<&'o mut [u8], OutOfMemory>,
+) -> Result<Info, DecodeError> {
     let Quantized {
         info,
         frame,
@@ -365,10 +379,10 @@ fn render<'o>(
     let width = info.width;
     let n = width * info.height;
     let threads = crate::thread_count(options.threads);
-    let data = wavelet::buffer(&mut scratch.image, n);
+    let data = wavelet::buffer(&mut scratch.image, n)?;
     quant::unquantize(&coeffs, &quant, width, &trees.q, data, threads);
     drop(coeffs);
-    let tmp = wavelet::buffer(&mut scratch.tmp, n);
+    let tmp = wavelet::buffer(&mut scratch.tmp, n)?;
     wavelet::reconstruct(
         data,
         tmp,
@@ -380,7 +394,7 @@ fn render<'o>(
     );
     wavelet::release(&mut scratch.tmp, scratch.keep);
 
-    par::zip_chunks(data, output(n), threads, |data, pixels| {
+    par::zip_chunks(data, output(n)?, threads, |data, pixels| {
         for (p, &v) in pixels.iter_mut().zip(data) {
             let v = (f64::from(v * frame.r_scale + frame.m_shift) + 0.5) as f32;
             // Also maps NaN, from absurd tables, to 0.
@@ -388,7 +402,7 @@ fn render<'o>(
         }
     });
     wavelet::release(&mut scratch.image, scratch.keep);
-    info
+    Ok(info)
 }
 
 #[cfg(test)]

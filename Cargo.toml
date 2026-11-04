@@ -1,3 +1,6 @@
+[workspace]
+members = ["cli"]
+
 [package]
 name = "wsq-codec"
 version = "0.1.1"
@@ -7,10 +10,19 @@ description = "Decoder and encoder for WSQ (Wavelet Scalar Quantization) fingerp
 license = "MIT"
 repository = "https://github.com/ybdn/wsq-codec"
 documentation = "https://docs.rs/wsq-codec"
+homepage = "https://github.com/ybdn/wsq-codec"
 readme = "README.md"
 keywords = ["wsq", "fingerprint", "biometrics", "image", "codec"]
 categories = ["multimedia::images", "compression"]
-exclude = [".github"]
+include = [
+    "/src/**",
+    "/tests/**",
+    "/benches/**",
+    "/docs/**",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [dependencies]
 image = { version = "0.25.8", default-features = false, optional = true }
@@ -21,4 +33,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [[bench]]
 name = "codec"
+harness = false
+
+[[bench]]
+name = "quality"
 harness = false

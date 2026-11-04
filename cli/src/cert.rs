@@ -5,21 +5,26 @@
 //! commands produce the files a submission holds and compare them with
 //! NIST's references before anything is sent:
 //!
-//! - `cert encode IN OUT [--software N] [--ppi N]` encodes every `.pgm` in
-//!   `IN` at both certification rates, into `OUT/0.75/` and `OUT/2.25/`,
-//!   and writes `OUT/submission.txt`, the description of the platform the
-//!   submission asks for, to be completed by hand.
+//! - `cert encode IN OUT [--software N] [--ppi N] [--compiler TEXT]` encodes
+//!   every `.pgm` in `IN` at both certification rates, into `OUT/0.75/` and
+//!   `OUT/2.25/`, and writes `OUT/submission.txt`, the description of the
+//!   platform the submission asks for, to be completed by hand. The
+//!   compiler is never guessed: pass the output of `rustc -vV` run with the
+//!   toolchain that built this binary, or fill the line in by hand.
 //! - `cert decode IN OUT` decodes every `.wsq` under `IN` into a binary
 //!   PGM (P5) at the same relative path under `OUT`.
 //! - `cert compare OURS REF` compares, for every `.wsq` under `REF`, the
 //!   stream at the same relative path under `OURS`: file size, header
 //!   parameters, bin widths and bin indices; and for every `.pgm` or
-//!   `.raw` under `REF`, the `.pgm` under `OURS`, pixel by pixel.
+//!   `.raw` under `REF`, the `.pgm` under `OURS`, pixel by pixel. It prints
+//!   the differences, then a verdict per file and a summary, judged by the
+//!   accuracy requirements of the specification (IAFIS-IC-0110 v3.1, Annex
+//!   AA; see `accuracy.rs`). The exit status is 0 when every file passes, 2
+//!   when a reference file has no readable counterpart and 3 when a
+//!   requirement fails (3 wins over 2).
 //!
-//! The comparison reports the differences and does not judge them: the
-//! accuracy requirements are those of the specification (IAFIS-IC-0110
-//! v3.1), and the file names NIST uses are in its instructions, to which
-//! the output directories may need renaming.
+//! The file names NIST uses are in its instructions, to which the output
+//! directories may need renaming.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -29,16 +34,38 @@ use std::path::{Path, PathBuf};
 use wsq_codec::inspect::{Quantized, read_quantized};
 use wsq_codec::{DecodeOptions, EncodeOptions};
 
+use crate::accuracy::{self, Thresholds};
 use crate::corpus::read_pgm;
 
 /// The bit rates the certification encodes at.
 const RATES: [(f32, &str); 2] = [(0.75, "0.75"), (2.25, "2.25")];
 
-pub fn run(args: &[String]) -> Result<bool, Box<dyn Error>> {
+/// How a `cert` command ended; the process exits with `code`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Outcome {
+    Done,
+    /// A reference file has no readable counterpart.
+    Incomplete,
+    /// A file does not meet the accuracy requirements.
+    Failed,
+}
+
+impl Outcome {
+    pub fn code(self) -> i32 {
+        match self {
+            Outcome::Done => 0,
+            Outcome::Incomplete => 2,
+            Outcome::Failed => 3,
+        }
+    }
+}
+
+pub fn run(args: &[String]) -> Result<Outcome, Box<dyn Error>> {
     match args {
         [cmd, input, output, flags @ ..] if cmd == "encode" => {
             let mut software = 0;
             let mut ppi = None;
+            let mut compiler = None;
             let mut flags = flags.iter();
             while let Some(flag) = flags.next() {
                 let value = flags
@@ -47,21 +74,28 @@ pub fn run(args: &[String]) -> Result<bool, Box<dyn Error>> {
                 match flag.as_str() {
                     "--software" => software = value.parse()?,
                     "--ppi" => ppi = Some(value.parse()?),
+                    "--compiler" => compiler = Some(value.clone()),
                     _ => return Err(format!("unknown option {flag}").into()),
                 }
             }
-            encode(Path::new(input), Path::new(output), software, ppi)?;
-            Ok(true)
+            encode(
+                Path::new(input),
+                Path::new(output),
+                software,
+                ppi,
+                compiler.as_deref(),
+            )?;
+            Ok(Outcome::Done)
         }
         [cmd, input, output] if cmd == "decode" => {
             decode(Path::new(input), Path::new(output))?;
-            Ok(true)
+            Ok(Outcome::Done)
         }
         [cmd, ours, reference] if cmd == "compare" => {
             compare(Path::new(ours), Path::new(reference))
         }
         _ => Err("usage: wsq cert encode IN OUT [--software N] [--ppi N] \
-                  | cert decode IN OUT | cert compare OURS REF"
+                  [--compiler TEXT] | cert decode IN OUT | cert compare OURS REF"
             .into()),
     }
 }
@@ -101,6 +135,7 @@ fn encode(
     output: &Path,
     software: u16,
     ppi: Option<u32>,
+    compiler: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let images = files(input, "pgm")?;
     if images.is_empty() {
@@ -130,7 +165,7 @@ fn encode(
         println!("{}: {width}x{height}", rel.display());
     }
     let sheet = output.join("submission.txt");
-    fs::write(&sheet, submission_sheet(software))?;
+    fs::write(&sheet, submission_sheet(software, compiler))?;
     println!(
         "{} images encoded at {} rates; complete {}",
         images.len(),
@@ -141,14 +176,17 @@ fn encode(
 }
 
 /// The plain text description a submission includes, with what can be
-/// detected filled in.
-fn submission_sheet(software: u16) -> String {
-    let rustc = std::process::Command::new("rustc")
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map_or_else(|| "(fill in)".to_string(), |s| s.trim().to_string());
+/// detected filled in. The compiler is only what the caller states: the
+/// `rustc` on the `PATH` is not necessarily the one that built this binary.
+fn submission_sheet(software: u16, compiler: Option<&str>) -> String {
+    let compiler = compiler.map_or_else(
+        || {
+            "(fill in: `rustc -vV` of the toolchain that built the tested binary, \
+             or pass --compiler)"
+                .to_string()
+        },
+        |c| c.trim().replace('\n', "\n                           "),
+    );
     let mut s = String::new();
     let _ = writeln!(s, "WSQ certification submission");
     let _ = writeln!(s);
@@ -179,7 +217,7 @@ fn submission_sheet(software: u16) -> String {
     );
     let _ = writeln!(s, "Hardware:                  (fill in: CPU model)");
     let _ = writeln!(s, "Operating system version:  (fill in)");
-    let _ = writeln!(s, "Compiler:                  {rustc}");
+    let _ = writeln!(s, "Compiler:                  {compiler}");
     s
 }
 
@@ -200,74 +238,34 @@ fn decode(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Differences between two streams' parameters and bin indices.
-#[derive(Default)]
-struct StreamDiff {
-    m_shift: f32,
-    r_scale: f32,
-    /// Largest relative difference of a nonzero bin width.
-    q_bin: f64,
-    z_bin: f64,
-    /// Subbands one stream drops and the other keeps.
-    dropped: usize,
-    /// Coefficients whose bin index differs, and the largest difference.
-    indices: usize,
-    max_index: u32,
-    total: usize,
+/// The header parameters that differ between two streams.
+fn header_diff(ours: &Quantized, reference: &Quantized) -> (f32, f32) {
+    (
+        (ours.m_shift - reference.m_shift).abs(),
+        (ours.r_scale - reference.r_scale).abs(),
+    )
 }
 
-fn relative(a: f32, b: f32) -> f64 {
-    let (a, b) = (f64::from(a), f64::from(b));
-    if b == 0.0 {
-        (a - b).abs()
+/// Prints the verdict on a file, after the raw differences; returns whether
+/// it passed.
+fn verdict(rel: &Path, checks: &[accuracy::Check]) -> bool {
+    let ok = accuracy::passed(checks);
+    if ok {
+        println!("{}: PASS", rel.display());
     } else {
-        ((a - b) / b).abs()
+        println!("{}: FAIL {}", rel.display(), accuracy::failures(checks));
     }
+    ok
 }
 
-fn diff_streams(ours: &Quantized, reference: &Quantized) -> StreamDiff {
-    let mut d = StreamDiff {
-        m_shift: (ours.m_shift - reference.m_shift).abs(),
-        r_scale: (ours.r_scale - reference.r_scale).abs(),
-        ..StreamDiff::default()
-    };
-    for (o, r) in ours.subbands.iter().zip(&reference.subbands) {
-        d.total += r.width * r.height;
-        if (o.q_bin == 0.0) != (r.q_bin == 0.0) {
-            d.dropped += 1;
-            let kept = if o.q_bin == 0.0 {
-                &r.coefficients
-            } else {
-                &o.coefficients
-            };
-            for &c in kept.iter().filter(|&&c| c != 0) {
-                d.indices += 1;
-                d.max_index = d.max_index.max(c.unsigned_abs().into());
-            }
-            continue;
-        }
-        if r.q_bin == 0.0 {
-            continue;
-        }
-        d.q_bin = d.q_bin.max(relative(o.q_bin, r.q_bin));
-        d.z_bin = d.z_bin.max(relative(o.z_bin, r.z_bin));
-        for (&a, &b) in o.coefficients.iter().zip(&r.coefficients) {
-            if a != b {
-                d.indices += 1;
-                d.max_index = d.max_index.max(u32::from(a.abs_diff(b)));
-            }
-        }
-    }
-    d
-}
-
-/// Compares the files under `ours` with NIST's under `reference`; returns
-/// whether every reference file had a counterpart that could be read.
-fn compare(ours: &Path, reference: &Path) -> Result<bool, Box<dyn Error>> {
+/// Compares the files under `ours` with NIST's under `reference`, and judges
+/// each by the accuracy requirements of the specification.
+fn compare(ours: &Path, reference: &Path) -> Result<Outcome, Box<dyn Error>> {
     let options = DecodeOptions::default();
+    let thresholds = Thresholds::default();
     let mut complete = true;
-    let (mut streams, mut identical_streams) = (0, 0);
-    let (mut images, mut identical_images) = (0, 0);
+    let (mut streams, mut identical_streams, mut passing_streams) = (0, 0, 0);
+    let (mut images, mut identical_images, mut passing_images) = (0, 0, 0);
 
     for ref_path in files(reference, "wsq")? {
         let rel = ref_path.strip_prefix(reference)?;
@@ -311,7 +309,8 @@ fn compare(ours: &Path, reference: &Path) -> Result<bool, Box<dyn Error>> {
             continue;
         }
         let size = (our_data.len() as f64 / ref_data.len() as f64 - 1.0) * 100.0;
-        let d = diff_streams(&o, &r);
+        let (m_shift, r_scale) = header_diff(&o, &r);
+        let d = accuracy::measure(&o, &r);
         if our_data == ref_data {
             identical_streams += 1;
             println!("{}: identical bytes", rel.display());
@@ -323,16 +322,23 @@ fn compare(ours: &Path, reference: &Path) -> Result<bool, Box<dyn Error>> {
                 rel.display(),
                 our_data.len(),
                 ref_data.len(),
-                d.m_shift,
-                d.r_scale,
-                d.q_bin,
-                d.z_bin,
+                m_shift,
+                r_scale,
+                d.worst_q,
+                d.worst_z,
                 d.dropped,
-                d.indices,
+                d.differing,
                 d.total,
-                d.max_index
+                d.max_difference
             );
         }
+        let checks = accuracy::judge_stream(
+            &d,
+            accuracy::size_without_comments(our_data.len(), &o.info.comments),
+            accuracy::size_without_comments(ref_data.len(), &r.info.comments),
+            &thresholds,
+        );
+        passing_streams += usize::from(verdict(rel, &checks));
     }
 
     let mut ref_images = files(reference, "pgm")?;
@@ -378,13 +384,13 @@ fn compare(ours: &Path, reference: &Path) -> Result<bool, Box<dyn Error>> {
             continue;
         }
         images += 1;
-        let (mut differing, mut max) = (0usize, 0u8);
-        for (&a, &b) in our_pixels.iter().zip(ref_pixels) {
-            if a != b {
-                differing += 1;
-                max = max.max(a.abs_diff(b));
-            }
-        }
+        let (differing, max) = accuracy::pixel_differences(our_pixels, ref_pixels);
+        let checks = [accuracy::pixels(
+            differing,
+            max,
+            ref_pixels.len() as u64,
+            &thresholds,
+        )];
         if differing == 0 {
             identical_images += 1;
             println!("{}: identical pixels", rel.display());
@@ -395,17 +401,28 @@ fn compare(ours: &Path, reference: &Path) -> Result<bool, Box<dyn Error>> {
                 our_pixels.len()
             );
         }
+        passing_images += usize::from(verdict(rel, &checks));
     }
 
     println!(
         "streams: {identical_streams}/{streams} identical; \
          reconstructions: {identical_images}/{images} identical"
     );
+    println!(
+        "verdict (IAFIS-IC-0110 v3.1, Annex AA): streams {passing_streams}/{streams} pass; \
+         reconstructions {passing_images}/{images} pass"
+    );
     if streams + images == 0 {
         return Err(format!("no .wsq, .pgm or .raw file under {}", reference.display()).into());
     }
     if !complete {
-        println!("some reference files have no readable counterpart");
+        println!("some reference files have no readable counterpart, hence no verdict");
     }
-    Ok(complete)
+    Ok(if passing_streams < streams || passing_images < images {
+        Outcome::Failed
+    } else if !complete {
+        Outcome::Incomplete
+    } else {
+        Outcome::Done
+    })
 }

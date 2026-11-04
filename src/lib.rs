@@ -44,10 +44,13 @@ mod huffman;
 pub mod image;
 pub mod inspect;
 mod math;
+mod mem;
 mod nistcom;
 mod par;
 mod quant;
 mod tables;
+#[cfg(test)]
+mod testgen;
 mod tree;
 mod wavelet;
 
@@ -100,9 +103,25 @@ pub struct Info {
 #[non_exhaustive]
 pub struct DecodeOptions {
     /// Largest `width * height` the decoder accepts, or `None` for no
-    /// limit. Decoding needs about 11 bytes per pixel at its peak, and the
-    /// frame header alone decides the size, so a small crafted stream can
-    /// otherwise claim an image of several gigapixels.
+    /// limit. The frame header alone decides the size, so a small crafted
+    /// stream can otherwise claim an image of several gigapixels.
+    ///
+    /// Decoding needs about 8 bytes per pixel at its peak: 4 for the
+    /// transformed image and 4 for the wavelet scratch buffer. The quantized
+    /// coefficients (at most 2 bytes per pixel) are dropped before the
+    /// scratch buffer is allocated, and the output pixels (1 byte) are
+    /// allocated after it is gone. A stream of under 1 KB that declares
+    /// 10000 by 10000 pixels with every bin at zero, which a flat image
+    /// legitimately produces and so cannot be rejected, peaked at 787 MiB
+    /// (measured on Linux x86-64, one thread). The limit is therefore the
+    /// only defense against a stream that is cheap to send and costly to
+    /// decode. When the buffers cannot be allocated, or are larger than the
+    /// address space of a 32-bit target, decoding fails with
+    /// [`DecodeError::OutOfMemory`] instead of aborting or panicking.
+    ///
+    /// For ANSI/NIST transactions, call [`read_info`] first and compare the
+    /// dimensions with the record's own fields, or derive the limit from
+    /// them.
     pub max_pixels: Option<usize>,
     /// Number of threads to split the work over: 1, the default, keeps it
     /// all on the calling thread, and 0 uses one thread per core. The
@@ -273,7 +292,11 @@ pub fn decode_into(
 /// [`decode_with`] allocates them for every image; a `Decoder` allocates
 /// them once and keeps them, as large as the largest image so far, which
 /// spares a batch of images the cost of allocating and first touching
-/// them again. The output is the same either way.
+/// them again. The output is the same either way. Its peak is then about
+/// 10 bytes per pixel, since the buffers stay while the quantized
+/// coefficients are read, against 8 for [`decode_with`] (see
+/// [`DecodeOptions::max_pixels`]); a refused allocation gives
+/// [`DecodeError::OutOfMemory`] as there.
 ///
 /// ```
 /// # let wsq = wsq_codec::encode(&[128; 100 * 100], 100, 100, &Default::default()).unwrap();

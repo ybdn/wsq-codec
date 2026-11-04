@@ -10,6 +10,7 @@
 
 use std::sync::{Arc, Barrier, RwLock, mpsc};
 
+use crate::mem::{self, OutOfMemory};
 use crate::par;
 use crate::tree::{W_TREE_LEN, WNode};
 
@@ -575,14 +576,13 @@ impl std::fmt::Debug for Scratch {
 
 /// The first `n` samples of `buf`, grown to them if needed. Whatever the
 /// samples hold is left there.
-pub(crate) fn buffer(buf: &mut Vec<f32>, n: usize) -> &mut [f32] {
+pub(crate) fn buffer(buf: &mut Vec<f32>, n: usize) -> Result<&mut [f32], OutOfMemory> {
     if buf.len() < n {
-        // A fresh zeroed allocation costs nothing until it is written,
-        // unlike growing the buffer in place.
+        // Freed first, so that the old and new buffers never coexist.
         *buf = Vec::new();
-        *buf = vec![0.0; n];
+        *buf = mem::filled(n, 0.0)?;
     }
-    &mut buf[..n]
+    Ok(&mut buf[..n])
 }
 
 /// One filtering pass over a `lenx` by `leny` region: between the region

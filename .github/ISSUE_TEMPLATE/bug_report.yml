@@ -1,0 +1,39 @@
+name: Bug report
+description: The codec fails, gives a wrong result or is not compatible with another WSQ software
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach real fingerprints.** They are biometric data, a special category under
+        GDPR article 9. Use a synthetic image, or describe the stream with the output of
+        `wsq info FILE`.
+
+        A vulnerability (panic, hang or memory exhaustion on a crafted stream) goes through
+        the private channel in SECURITY.md, not here.
+  - type: input
+    id: version
+    attributes:
+      label: wsq-codec version or commit
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Rust version and platform
+      placeholder: "rustc 1.85.0, Linux x86-64"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: A short program or command, on a synthetic image. For a stream, the `wsq info` output.
+    validations:
+      required: true

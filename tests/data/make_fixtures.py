@@ -7,12 +7,30 @@ with -DFILTBANK_EVEN_8X8_1 (see README.md). Prints the FNV-1a hash of each
 image the reference decoder produces, for tests/nbis.rs.
 """
 
+import math
 import os
 import subprocess
 import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def triangle(p, period):
+    """Triangle wave of the given period (a multiple of 2), from 0 to period / 2."""
+    return abs(p % period - period // 2)
+
+
+def ridges_value(kind, x, y, w, h, r):
+    """Curved ridges, as `ridges` in benches/codec.rs; `r` is the next random number.
+
+    "dark_ridges" has a mean of about 75 instead of 143, for the images that
+    NBIS refuses when bright (see README.md, "Large images")."""
+    base, gain = (40, 6) if kind == "ridges" else (20, 3)
+    cx, cy = w // 2, h * 6 // 10
+    dx, dy = abs(x - cx), abs(y - cy)
+    phase = math.isqrt(dx * dx + dy * dy) // 3 + 4 * triangle(x // 5, 16)
+    return base + gain * triangle(phase, 64) + (r >> 4)
 
 
 def pattern(kind, w, h, seed):
@@ -35,6 +53,8 @@ def pattern(kind, w, h, seed):
                 v = 30 + abs(t - 16) * 12 + (rand() & 15)
             elif kind == "noise":
                 v = rand()
+            elif kind in ("ridges", "dark_ridges"):
+                v = ridges_value(kind, x, y, w, h, rand())
             else:
                 v = (200 if (x // 7 + y // 5) % 2 else 40) + (rand() & 7)
             out.append(v)

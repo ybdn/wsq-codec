@@ -2,16 +2,16 @@
 //!
 //! Set `WSQ_CORPUS_DIR` to a directory of WSQ files, or of files with WSQ
 //! streams inside them such as ANSI/NIST-ITL transactions, with reference
-//! decodes next to them as the `check` command of the `wsq` example reads
+//! decodes next to them as the `check` command of the `wsq` tool reads
 //! them. The test then fails if a stream does not decode or differs from
 //! its reference. Without the variable it does nothing, so that CI needs
 //! no corpus.
 //!
 //! ```sh
-//! WSQ_CORPUS_DIR=/path/to/corpus cargo test --release --test corpus -- --nocapture
+//! WSQ_CORPUS_DIR=/path/to/corpus cargo test --release -p wsq-cli --test corpus -- --nocapture
 //! ```
 
-#[path = "../examples/wsq/corpus.rs"]
+#[path = "../src/corpus.rs"]
 #[allow(dead_code)]
 mod corpus;
 
