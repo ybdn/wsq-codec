@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `decode` returns the stream's metadata with the pixels (#29): `Image` gains `software` and
+  `comments` next to `ppi`, so no second `read_info` call is needed (`wsq check` no longer makes
+  one). `Image` is `#[non_exhaustive]`, so this is not a breaking change.
+- `image` integration (#30): `WsqDecoder` implements `ImageDecoder::set_limits`, which checks the
+  dimension limits and reserves the decoder's peak (8 bytes per pixel) from `Limits::max_alloc`,
+  so `ImageReader` refuses an image too large for it before decoding. New
+  `register_hooks_with(DecodeOptions)` sets the options (`max_pixels`, `threads`) the hooks decode
+  with; the hooks being global, the first registration wins. Behaviour change: with the default
+  `max_alloc` of 512 MiB, `image` now refuses WSQ images above about 67 million pixels
+  (512 MiB / 8); `register_hooks_with` or `Limits` raise that.
 - With several threads, dequantization and the encoder's subband variances run in parallel; the
   largest-magnitude scan that bounds the bin widths shares the variance pass. Output unchanged.
 - The wavelet transform starts its threads once per image instead of once per filtering pass,

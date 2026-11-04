@@ -70,3 +70,37 @@ fn a_modified_image_does_not_convert() {
     image.pixels.clear();
     assert!(GrayImage::try_from(image).is_err());
 }
+
+#[test]
+fn image_limits_refuse_large_images_before_decoding() {
+    let wsq = encode_gray_image(&sample(), &EncodeOptions::default()).unwrap();
+    // 150 x 120 pixels need about 8 bytes each at the peak: 144000 bytes.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(100_000);
+    let mut decoder = WsqDecoder::new(&wsq[..]).unwrap();
+    let err = decoder.set_limits(limits).unwrap_err();
+    assert!(matches!(err, image::ImageError::Limits(_)), "{err}");
+
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(150_000);
+    let mut decoder = WsqDecoder::new(&wsq[..]).unwrap();
+    decoder.set_limits(limits).unwrap();
+
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(100);
+    let mut decoder = WsqDecoder::new(&wsq[..]).unwrap();
+    assert!(decoder.set_limits(limits).is_err());
+
+    // Through the reader, once the hooks are in place.
+    register_hooks();
+    let mut reader = ImageReader::new(Cursor::new(&wsq))
+        .with_guessed_format()
+        .unwrap();
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(100_000);
+    reader.limits(limits);
+    assert!(matches!(
+        reader.decode().unwrap_err(),
+        image::ImageError::Limits(_)
+    ));
+}
