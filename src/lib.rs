@@ -121,12 +121,14 @@ impl Default for DecodeOptions {
 
 impl DecodeOptions {
     /// Sets [`max_pixels`](Self::max_pixels).
+    #[must_use]
     pub fn with_max_pixels(mut self, max_pixels: Option<usize>) -> Self {
         self.max_pixels = max_pixels;
         self
     }
 
     /// Sets [`threads`](Self::threads).
+    #[must_use]
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.threads = threads;
         self
@@ -182,30 +184,35 @@ impl Default for EncodeOptions {
 
 impl EncodeOptions {
     /// Sets [`bitrate`](Self::bitrate).
+    #[must_use]
     pub fn with_bitrate(mut self, bitrate: f32) -> Self {
         self.bitrate = bitrate;
         self
     }
 
     /// Sets [`ppi`](Self::ppi).
+    #[must_use]
     pub fn with_ppi(mut self, ppi: Option<u32>) -> Self {
         self.ppi = ppi;
         self
     }
 
     /// Appends a comment to [`comments`](Self::comments).
+    #[must_use]
     pub fn with_comment(mut self, comment: Vec<u8>) -> Self {
         self.comments.push(comment);
         self
     }
 
     /// Sets [`software`](Self::software).
+    #[must_use]
     pub fn with_software(mut self, software: u16) -> Self {
         self.software = software;
         self
     }
 
     /// Sets [`threads`](Self::threads).
+    #[must_use]
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.threads = threads;
         self
@@ -222,11 +229,24 @@ fn thread_count(threads: usize) -> usize {
 
 /// Decodes a WSQ stream with the default [`DecodeOptions`], which reject
 /// images of more than [`DEFAULT_MAX_PIXELS`] pixels.
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if the data is not a valid WSQ stream (for
+/// instance [`NotWsq`](DecodeError::NotWsq), [`UnexpectedEof`](DecodeError::UnexpectedEof) or
+/// [`CorruptData`](DecodeError::CorruptData)), or [`TooLarge`](DecodeError::TooLarge) if the
+/// image has more than [`DEFAULT_MAX_PIXELS`] pixels.
 pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
     decode_with(data, &DecodeOptions::default())
 }
 
 /// Decodes a WSQ stream.
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if the data is not a valid WSQ stream, as for [`decode`], or
+/// [`TooLarge`](DecodeError::TooLarge) if the image has more than
+/// [`max_pixels`](DecodeOptions::max_pixels) pixels.
 pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
     decode::decode(data, options)
 }
@@ -238,6 +258,11 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, Decode
 /// that ends with the stream, for instance through [`Read::take`] when the
 /// stream sits inside a larger file, which also bounds the memory a
 /// stream from an untrusted source can claim.
+///
+/// # Errors
+///
+/// Returns [`ReadError::Io`] if reading fails, and [`ReadError::Decode`] with the
+/// [`DecodeError`] that [`decode_with`] gives if the data read cannot be decoded.
 ///
 /// [`Read::take`]: std::io::Read::take
 pub fn decode_from<R: std::io::Read>(
@@ -251,6 +276,11 @@ pub fn decode_from<R: std::io::Read>(
 
 /// Reads the dimensions, resolution and comments of a WSQ stream without
 /// decoding its image.
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if the headers are not valid, as for [`decode`]. The entropy-coded
+/// data is not read, so corruption there is not reported. The image size is not limited.
 pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
     decode::read_info(data)
 }
@@ -260,6 +290,16 @@ pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
 ///
 /// Both dimensions must be between 81 and 65535; smaller images leave
 /// some subbands too small to quantize.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`]:
+/// [`InvalidDimensions`](EncodeError::InvalidDimensions) if a dimension is outside that range,
+/// [`PixelCountMismatch`](EncodeError::PixelCountMismatch) if `pixels` does not hold
+/// `width * height` bytes, [`InvalidBitrate`](EncodeError::InvalidBitrate) or
+/// [`BitrateTooLow`](EncodeError::BitrateTooLow) for an unusable bit rate,
+/// [`CommentTooLong`](EncodeError::CommentTooLong) for a comment that does not fit in one
+/// segment, and [`InvalidPpi`](EncodeError::InvalidPpi) if the resolution is zero.
 pub fn encode(
     pixels: &[u8],
     width: usize,
@@ -270,6 +310,11 @@ pub fn encode(
 }
 
 /// Encodes an image as [`encode`] does and writes the stream to `writer`.
+///
+/// # Errors
+///
+/// Returns [`WriteError::Encode`] with the [`EncodeError`] that [`encode`] gives, and
+/// [`WriteError::Io`] if writing or flushing fails.
 pub fn encode_to<W: std::io::Write>(
     mut writer: W,
     pixels: &[u8],

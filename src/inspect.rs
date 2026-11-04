@@ -58,6 +58,10 @@ pub struct Subband {
 
 /// Reads a stream's parameters and quantized coefficients, with the same
 /// checks and pixel limit as [`decode_with`](crate::decode_with).
+///
+/// # Errors
+///
+/// Returns the [`DecodeError`] that [`decode_with`](crate::decode_with) gives for the same data.
 pub fn read_quantized(data: &[u8], options: &DecodeOptions) -> Result<Quantized, DecodeError> {
     let Raw {
         info,
