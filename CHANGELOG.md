@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Public-crate showcase: `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue and pull
+  request templates, README badges and a notice (not affiliated with the FBI or NIST, not
+  certified), `homepage` in the package metadata and an `include` list in place of `exclude`.
 - The benchmark images are generated with integer arithmetic only, and `benches/hashes.txt` is
   recorded again from them (checked on Linux x86-64 with 1, 0 and 3 threads). CI runs
   `--check` on Linux, macOS and Windows.
