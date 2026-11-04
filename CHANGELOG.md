@@ -2,13 +2,16 @@
 
 ## Unreleased
 
+- The benchmark images are generated with integer arithmetic only, and `benches/hashes.txt` is
+  recorded again from them (checked on Linux x86-64 with 1, 0 and 3 threads). CI runs
+  `--check` on Linux, macOS and Windows.
 - A thread that cannot be created (no thread support on the target, thread limits) no longer
   panics: that share of the work runs on the calling thread, and the output is unchanged.
-- The `with_*` methods of `DecodeOptions` and `EncodeOptions` are `#[must_use]`, and the
-  public functions that return a `Result` document their errors.
 - The encoder computes the logarithms and powers of its bit allocation itself, correctly
   rounded, instead of calling the platform's math library: its output is now the same on every
   platform. It is unchanged wherever glibc rounded correctly, which covers the NBIS fixtures.
+- The `with_*` methods of `DecodeOptions` and `EncodeOptions` are `#[must_use]`, and the
+  public functions that return a `Result` document their errors.
 - `inspect::read_quantized` returns the header parameters, bin widths and bin indices of a
   stream, the values the FBI's certification compares.
 - The `wsq` example's `cert` commands run the certification tests locally and compare the

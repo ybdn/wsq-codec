@@ -31,6 +31,8 @@ jobs:
       - run: cargo test --doc
       - run: cargo test --all-targets --features image
       - run: cargo test --doc --features image
+      - run: cargo bench --bench codec -- 1 1 --check
+      - run: cargo bench --bench codec -- 0 1 --check
 
   wasm:
     name: build (wasm32-unknown-unknown)
