@@ -200,8 +200,9 @@ and the encoding and decoding time (`cargo bench --bench quality`). It prints a 
 `--csv FILE`, every measurement as CSV. `--nbis BIN_DIR` runs NBIS 5.0.0's `cwsq` and `dwsq` on
 the same images and compares streams and reconstructions, and `--nbis-streams DIR` reads
 streams NBIS wrote elsewhere. `WSQ_QUALITY_DIR` names a local directory of PGM files to measure
-too; it stays outside the repository. `docs/quality.md` holds the first table, with the
-conditions of measurement.
+too; it stays outside the repository. `--optimized` also measures an experimental encoder that
+hits the requested rate (#42, not part of the stable API) against the conformant one at equal
+size. `docs/quality.md` holds the tables, with the conditions of measurement.
 
 ## Contributing and security
 
