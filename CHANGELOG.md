@@ -6,6 +6,9 @@
   largest-magnitude scan that bounds the bin widths shares the variance pass. Output unchanged.
 - The wavelet transform starts its threads once per image instead of once per filtering pass,
   and splits column passes by output rows: several threads no longer slow small images down.
+- With several threads, the decoder finds the Huffman blocks by their markers and decodes them
+  side by side. A stream that fails on that path is read again on one thread, so errors are
+  unchanged.
 - The benchmark images are generated with integer arithmetic only, and `benches/hashes.txt` is
   recorded again from them (checked on Linux x86-64 with 1, 0 and 3 threads). CI runs
   `--check` on Linux, macOS and Windows.
