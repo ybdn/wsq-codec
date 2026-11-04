@@ -35,3 +35,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 name = "codec"
 harness = false
 
+[[bench]]
+name = "quality"
+harness = false

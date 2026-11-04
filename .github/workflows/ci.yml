@@ -35,6 +35,7 @@ jobs:
       - run: cargo test -p wsq-cli
       - run: cargo bench --bench codec -- 1 1 --check
       - run: cargo bench --bench codec -- 0 1 --check
+      - run: cargo bench --bench quality -- --runs 1
 
   wasm:
     name: build (wasm32-unknown-unknown)
