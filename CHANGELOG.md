@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The decoder and the encoder allocate their image-sized buffers fallibly (coefficients,
+  transformed image, wavelet scratch, output pixels, normalized input, quantized coefficients,
+  and the copies `inspect::read_quantized` returns). A refused allocation, or a size beyond the
+  address space of a 32-bit target, gives the new `DecodeError::OutOfMemory` or
+  `EncodeError::OutOfMemory` instead of aborting the process or panicking with "capacity
+  overflow"; output is unchanged. Two kinds of allocation are still infallible: the compressed
+  output of the encoder, which grows as it is written, and the wavelet's transposition blocks,
+  which follow the longest dimension, not the area (at most 2 x 64 x 65535 floats per thread).
+- The documented decoding peak is about 8 bytes per pixel, not 11: 787 MiB measured for a
+  10000 by 10000 image (Linux x86-64, one thread). `DecodeOptions::max_pixels` and the README
+  advise checking `read_info` against the dimensions of an ANSI/NIST record. CI tests a 32-bit
+  target (`i686-unknown-linux-gnu`).
 - The benchmark images are generated with integer arithmetic only, and `benches/hashes.txt` is
   recorded again from them (checked on Linux x86-64 with 1, 0 and 3 threads). CI runs
   `--check` on Linux, macOS and Windows.
