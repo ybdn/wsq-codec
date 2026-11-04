@@ -8,6 +8,8 @@
 //! recorded once per line length as a [`Plan`], which then filters many
 //! rows or columns side by side.
 
+use std::sync::{Arc, Barrier, RwLock, mpsc};
+
 use crate::par;
 use crate::tree::{W_TREE_LEN, WNode};
 
@@ -183,11 +185,26 @@ impl Plan {
     /// input column, and `dst[k]` sample `k` of every output column, for
     /// `k` below [`len`](Self::len).
     fn apply_columns(&self, src: &[&[f32]], dst: &mut [&mut [f32]]) {
+        self.apply_columns_range(src, dst, 0..self.len);
+    }
+
+    /// [`apply_columns`](Self::apply_columns) restricted to the output
+    /// samples in `range`: `dst[k]` holds output sample `range.start + k`.
+    ///
+    /// Each output sample goes through the operations that compute it in
+    /// plan order, wherever the range starts, so splitting the outputs
+    /// between threads does not change them.
+    fn apply_columns_range(
+        &self,
+        src: &[&[f32]],
+        dst: &mut [&mut [f32]],
+        range: std::ops::Range<usize>,
+    ) {
         for out in dst.iter_mut() {
             out.fill(0.0);
         }
-        for op in &self.ops {
-            let out = &mut *dst[op.at];
+        for op in self.ops.iter().filter(|op| range.contains(&op.at)) {
+            let out = &mut *dst[op.at - range.start];
             let mut terms = self.terms[op.terms.clone()].iter();
             if !op.accumulate {
                 match terms.next() {
@@ -206,50 +223,6 @@ impl Plan {
             }
         }
     }
-
-    /// [`apply_rows`](Self::apply_rows) on up to `threads` threads, each
-    /// filtering its share of the rows.
-    fn rows_parallel(&self, src: &[&[f32]], dst: &mut [&mut [f32]], threads: usize) {
-        let parts = shares(threads, src.len(), self.len);
-        if parts <= 1 {
-            return self.apply_rows(src, dst);
-        }
-        let size = src.len().div_ceil(parts);
-        std::thread::scope(|scope| {
-            for (src, dst) in src.chunks(size).zip(dst.chunks_mut(size)) {
-                drop(par::spawn(scope, move || self.apply_rows(src, dst)));
-            }
-        });
-    }
-
-    /// [`apply_columns`](Self::apply_columns) on up to `threads` threads,
-    /// each filtering its share of the columns.
-    fn columns_parallel(&self, src: &[&[f32]], dst: &mut [&mut [f32]], threads: usize) {
-        let cols = src.first().map_or(0, |row| row.len());
-        let parts = shares(threads, cols, self.len);
-        if parts <= 1 {
-            return self.apply_columns(src, dst);
-        }
-        let size = cols.div_ceil(parts);
-        let mut dst_parts: Vec<Vec<&mut [f32]>> = (0..parts).map(|_| Vec::new()).collect();
-        for row in dst.iter_mut() {
-            for (part, chunk) in dst_parts.iter_mut().zip(row.chunks_mut(size)) {
-                part.push(chunk);
-            }
-        }
-        std::thread::scope(|scope| {
-            for (i, mut dst) in dst_parts.into_iter().enumerate() {
-                let start = i * size;
-                let src: Vec<&[f32]> = src
-                    .iter()
-                    .map(|row| &row[start..(start + size).min(cols)])
-                    .collect();
-                drop(par::spawn(scope, move || {
-                    self.apply_columns(&src, &mut dst)
-                }));
-            }
-        });
-    }
 }
 
 /// How many threads to split `lines` lines of `len` samples over, given
@@ -260,32 +233,6 @@ fn shares(threads: usize, lines: usize, len: usize) -> usize {
     let by_lines = lines / MIN_LINES;
     let by_samples = lines * len / MIN_SAMPLES;
     threads.min(by_lines).min(by_samples).max(1)
-}
-
-/// The rows of the `cols` by `len` region of `data` at (`x`, `y`), for an
-/// image `width` samples wide.
-fn region(data: &[f32], width: usize, x: usize, y: usize, cols: usize, len: usize) -> Vec<&[f32]> {
-    data[y * width..]
-        .chunks(width)
-        .take(len)
-        .map(|row| &row[x..x + cols])
-        .collect()
-}
-
-/// Mutable version of [`region`].
-fn region_mut(
-    data: &mut [f32],
-    width: usize,
-    x: usize,
-    y: usize,
-    cols: usize,
-    len: usize,
-) -> Vec<&mut [f32]> {
-    data[y * width..]
-        .chunks_mut(width)
-        .take(len)
-        .map(|row| &mut row[x..x + cols])
-        .collect()
 }
 
 /// Plan for splitting a line of `n` samples into its low-pass half
@@ -588,6 +535,130 @@ fn synthesis_plan(n: usize, lo: &[f32], hi: &[f32], inv: bool) -> Plan {
     plan
 }
 
+/// One filtering pass over a `lenx` by `leny` region: between the region
+/// of the image at (`x`, `y`) and the top left corner of the scratch
+/// buffer, in the direction `to_tmp` gives.
+struct Pass {
+    plan: Plan,
+    /// Filters columns rather than rows.
+    columns: bool,
+    to_tmp: bool,
+    x: usize,
+    y: usize,
+    lenx: usize,
+    leny: usize,
+}
+
+/// Rows of a buffer `width` samples wide, each behind its own lock so that
+/// threads can share the buffer out row by row, differently in each pass.
+fn lock_rows(data: &mut [f32], width: usize) -> Vec<RwLock<&mut [f32]>> {
+    data.chunks_mut(width).map(RwLock::new).collect()
+}
+
+/// Runs `passes` in order over `data` and `tmp`, both `width` samples
+/// wide, on up to `threads` threads started once for all of them.
+///
+/// Every pass splits its output rows between the threads, as many as the
+/// pass is worth, and the threads wait for each other between passes. A
+/// row pass filters its share of the rows, and a column pass computes its
+/// share of the output rows from all the input rows. Either way each
+/// output sample goes through the same products and sums as on a single
+/// thread.
+fn run(passes: &[Pass], data: &mut [f32], tmp: &mut [f32], width: usize, threads: usize) {
+    let wanted = passes
+        .iter()
+        .map(|p| shares(threads, p.leny, p.lenx))
+        .max()
+        .unwrap_or(1);
+    let image = lock_rows(data, width);
+    let scratch = lock_rows(tmp, width);
+    let work = |id: usize, workers: usize, barrier: Option<&Barrier>| {
+        for pass in passes {
+            run_share(
+                pass,
+                id,
+                workers.min(shares(threads, pass.leny, pass.lenx)),
+                &image,
+                &scratch,
+            );
+            if let Some(barrier) = barrier {
+                barrier.wait();
+            }
+        }
+    };
+    if wanted <= 1 {
+        return work(0, 1, None);
+    }
+    std::thread::scope(|scope| {
+        // Threads that could be created learn how many there are, and
+        // which one they are, before the first pass.
+        let mut starts = Vec::new();
+        for _ in 1..wanted {
+            let (start, started) = mpsc::channel::<(usize, usize, Arc<Barrier>)>();
+            let job = move || {
+                if let Ok((id, workers, barrier)) = started.recv() {
+                    work(id, workers, Some(&barrier));
+                }
+            };
+            match par::try_spawn(scope, job) {
+                Ok(_) => starts.push(start),
+                Err(_) => break,
+            }
+        }
+        let workers = starts.len() + 1;
+        let barrier = Arc::new(Barrier::new(workers));
+        for (i, start) in starts.iter().enumerate() {
+            start
+                .send((i + 1, workers, Arc::clone(&barrier)))
+                .expect("a started thread waits for its share");
+        }
+        work(0, workers, Some(&barrier));
+    });
+}
+
+/// Thread `id`'s share of `pass`, split between `parts` threads.
+fn run_share<'a>(
+    pass: &Pass,
+    id: usize,
+    parts: usize,
+    image: &[RwLock<&'a mut [f32]>],
+    scratch: &[RwLock<&'a mut [f32]>],
+) {
+    let size = pass.leny.div_ceil(parts.max(1));
+    let first = id * size;
+    let last = (first + size).min(pass.leny);
+    if first >= last {
+        return;
+    }
+    let ((src, sx, sy), (dst, dx, dy)) = if pass.to_tmp {
+        ((image, pass.x, pass.y), (scratch, 0, 0))
+    } else {
+        ((scratch, 0, 0), (image, pass.x, pass.y))
+    };
+    let lenx = pass.lenx;
+    // Column passes read every input row; row passes read their own.
+    let inputs = if pass.columns {
+        0..pass.leny
+    } else {
+        first..last
+    };
+    let src: Vec<_> = src[sy + inputs.start..sy + inputs.end]
+        .iter()
+        .map(|row| row.read().expect("no thread panics while holding a row"))
+        .collect();
+    let mut dst: Vec<_> = dst[dy + first..dy + last]
+        .iter()
+        .map(|row| row.write().expect("no thread panics while holding a row"))
+        .collect();
+    let src: Vec<&[f32]> = src.iter().map(|row| &row[sx..sx + lenx]).collect();
+    let mut dst: Vec<&mut [f32]> = dst.iter_mut().map(|row| &mut row[dx..dx + lenx]).collect();
+    if pass.columns {
+        pass.plan.apply_columns_range(&src, &mut dst, first..last);
+    } else {
+        pass.plan.apply_rows(&src, &mut dst);
+    }
+}
+
 /// Forward transform of the whole image in place, one wavelet tree node
 /// at a time, on up to `threads` threads.
 pub(crate) fn decompose(
@@ -597,23 +668,23 @@ pub(crate) fn decompose(
     threads: usize,
 ) {
     let mut tmp = vec![0.0f32; data.len()];
+    let mut passes = Vec::with_capacity(2 * tree.len());
     for node in tree {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
-        // Rows: image -> tmp.
-        let rows = analysis_plan(lenx, &LOFILT, &HIFILT, node.inv_rw);
-        rows.rows_parallel(
-            &region(data, width, x, y, lenx, leny),
-            &mut region_mut(&mut tmp, width, 0, 0, lenx, leny),
-            threads,
-        );
-        // Columns: tmp -> image.
-        let cols = analysis_plan(leny, &LOFILT, &HIFILT, node.inv_cl);
-        cols.columns_parallel(
-            &region(&tmp, width, 0, 0, lenx, leny),
-            &mut region_mut(data, width, x, y, lenx, leny),
-            threads,
-        );
+        // Rows: image -> tmp, then columns: tmp -> image.
+        for (columns, len, inv) in [(false, lenx, node.inv_rw), (true, leny, node.inv_cl)] {
+            passes.push(Pass {
+                plan: analysis_plan(len, &LOFILT, &HIFILT, inv),
+                columns,
+                to_tmp: !columns,
+                x,
+                y,
+                lenx,
+                leny,
+            });
+        }
     }
+    run(&passes, data, &mut tmp, width, threads);
 }
 
 /// Inverse transform of the whole image in place, on up to `threads`
@@ -628,21 +699,21 @@ pub(crate) fn reconstruct(
     threads: usize,
 ) {
     let mut tmp = vec![0.0f32; data.len()];
+    let mut passes = Vec::with_capacity(2 * tree.len());
     for node in tree.iter().rev() {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
-        // Columns: image -> tmp.
-        let cols = synthesis_plan(leny, lo, hi, node.inv_cl);
-        cols.columns_parallel(
-            &region(data, width, x, y, lenx, leny),
-            &mut region_mut(&mut tmp, width, 0, 0, lenx, leny),
-            threads,
-        );
-        // Rows: tmp -> image.
-        let rows = synthesis_plan(lenx, lo, hi, node.inv_rw);
-        rows.rows_parallel(
-            &region(&tmp, width, 0, 0, lenx, leny),
-            &mut region_mut(data, width, x, y, lenx, leny),
-            threads,
-        );
+        // Columns: image -> tmp, then rows: tmp -> image.
+        for (columns, len, inv) in [(true, leny, node.inv_cl), (false, lenx, node.inv_rw)] {
+            passes.push(Pass {
+                plan: synthesis_plan(len, lo, hi, inv),
+                columns,
+                to_tmp: columns,
+                x,
+                y,
+                lenx,
+                leny,
+            });
+        }
     }
+    run(&passes, data, &mut tmp, width, threads);
 }

@@ -34,7 +34,23 @@ where
     F: FnOnce() -> T + Send + 'scope,
     T: Send + 'scope,
 {
-    // A failed spawn drops the closure, so keep it reachable to run it here.
+    match try_spawn(scope, f) {
+        Ok(handle) => Task::Thread(handle),
+        Err(f) => Task::Done(f()),
+    }
+}
+
+/// Runs `f` on a new scoped thread, or gives it back if the thread cannot
+/// be created.
+pub(crate) fn try_spawn<'scope, 'env, T, F>(
+    scope: &'scope Scope<'scope, 'env>,
+    f: F,
+) -> Result<ScopedJoinHandle<'scope, T>, F>
+where
+    F: FnOnce() -> T + Send + 'scope,
+    T: Send + 'scope,
+{
+    // A failed spawn drops the closure, so keep it reachable to give it back.
     let slot = Arc::new(Mutex::new(Some(f)));
     let job = Arc::clone(&slot);
     #[cfg(test)]
@@ -49,13 +65,10 @@ where
             f.expect("job runs once")()
         })
     };
-    match spawned {
-        Ok(handle) => Task::Thread(handle),
-        Err(_) => {
-            let f = slot.lock().ok().and_then(|mut f| f.take());
-            Task::Done(f.expect("a job that did not start is still here")())
-        }
-    }
+    spawned.map_err(|_| {
+        let f = slot.lock().ok().and_then(|mut f| f.take());
+        f.expect("a job that did not start is still here")
+    })
 }
 
 /// Fewest items worth a thread of their own.
@@ -176,7 +189,10 @@ mod tests {
         let order = [2, 0, 3, 1];
         let squares = [0, 1, 4, 9];
         assert_eq!(map_dynamic(&order, 3, |i| i * i), squares);
-        assert_eq!(without_threads(|| map_dynamic(&order, 3, |i| i * i)), squares);
+        assert_eq!(
+            without_threads(|| map_dynamic(&order, 3, |i| i * i)),
+            squares
+        );
         let src: Vec<u32> = (0..MIN_ITEMS as u32 * 3).collect();
         let mut dst = vec![0; src.len()];
         without_threads(|| {
