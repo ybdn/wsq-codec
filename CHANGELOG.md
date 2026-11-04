@@ -10,6 +10,10 @@
   for a reference file without a readable counterpart). The limits are in
   `examples/wsq/accuracy.rs`, with unit tests on each side of every limit; the points the
   specification leaves open are listed in `docs/certification.md` as questions for NIST.
+- The platform-independence claim is worded as determinism, not exact rounding, and scoped to
+  targets with IEEE 754 `f64` (not x87-only ones such as `i586`). `docs/certification.md` cites
+  the CI runs that show the benchmark's stream hashes on Linux, macOS and Windows, and says what
+  has not been verified.
 - `tests/nbis.rs` compares the encoder with NBIS 5.0.0 on large images without committing any
   stream: the length and the FNV-1a hash of NBIS's stream and of its decode, at 0.75 and 2.25
   bits per pixel, for 800x750 and 1600x1500 images (ridges, rings, noise) in the default tests

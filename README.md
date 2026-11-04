@@ -144,13 +144,19 @@ The encoder departs from NBIS only where NBIS's output is broken:
 The decoder rejects streams whose blocks hold fewer coefficients than the subbands need, where
 NBIS would read uninitialized memory.
 
-The encoder's output is the same on every platform: the logarithms and powers of the bit
-allocation are computed by the crate itself, in double-double arithmetic, and correctly rounded,
-rather than by the platform's math library, whose last bit varies between systems. glibc's `log`
-and `pow`, which NBIS used for the fixtures, return the correctly rounded result on all but rare
-inputs (about 1 in 1000 for `pow`); an image whose bit allocation hits one of those would get a
-quantizer bin differing from NBIS's in its last digit, identically on every platform. CI checks
-the NBIS fixtures on Linux, macOS and Windows.
+The encoder's output is deterministic on every platform: the logarithms and powers of the bit
+allocation are computed by the crate itself, in double-double arithmetic, from basic IEEE 754
+operations, rather than by the platform's math library, whose last bit varies between systems,
+and the rest is basic arithmetic in a fixed order without fused multiply-add. This holds on
+targets whose `f64` and `f32` arithmetic follows IEEE 754, which is all of Rust's usual targets;
+targets that compute `f64` on the x87 unit (`i586`) are excluded. The results of `ln` and `pow`
+are correctly rounded except within about 2^-100 of the midpoint between two `f64`s, so the
+claim is determinism, not exact rounding. glibc's `log` and `pow`, which NBIS used for the
+fixtures, return the correctly rounded result on all but rare inputs (about 1 in 1000 for
+`pow`); an image whose bit allocation hits one of those would get a quantizer bin differing from
+NBIS's in its last digit, identically on every platform. CI checks the NBIS fixtures and the
+benchmark's stream hashes on Linux, macOS and Windows; `docs/certification.md` lists the runs
+and what has not been verified.
 
 ## Performance
 

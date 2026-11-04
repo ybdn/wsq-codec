@@ -134,14 +134,50 @@ keeps improving:
 
 - **Implementation number.** It is assigned through the certification process; there is nothing to
   pick in advance. Until then, keep `software = 0`.
-- **Per-configuration scope.** The certificate still names one configuration, but the encoder's
-  output no longer depends on the platform's math library: logarithms and powers are computed
-  in the crate and correctly rounded (`src/math.rs`), and the rest is IEEE 754 arithmetic that
-  rounds alike everywhere. Every platform should therefore produce the same files, which `cert
-  compare` can confirm between platforms before each submission.
+- **Per-configuration scope.** The certificate still names one configuration. The encoder's
+  output does not depend on the platform within the scope stated in the next section, which
+  `cert compare` can confirm between platforms before each submission.
 - **Images below 81 pixels, and the flat-image widening** (README, "Differences from NBIS") depart
   from NBIS. Check that no certification image triggers them.
 - **Certificate and releases.** Decided: the project ships certified releases (profile
   `Conformant`) and optimized ones (profile `Optimized`), as described above. The certificate
   is tied to a version, so it is pursued once the API is frozen for 1.0; the order of the work
   is in the roadmap, issue #17 of the repository.
+
+## Platform independence
+
+The statement, and what supports it (issue #19).
+
+**Statement.** On targets whose `f64` and `f32` arithmetic follows IEEE 754 binary64 and
+binary32, the encoder's output is deterministic: the same image and options give the same bytes,
+whatever the operating system, the C library, the CPU model or the number of threads. It is not
+"correctly rounded": the logarithms and powers of the bit allocation, computed in `src/math.rs`
+from addition, subtraction, multiplication and division alone, are correctly rounded except when
+the exact result lies within about 2^-100 of the midpoint between two `f64`s, and the rest of the
+encoder is basic arithmetic in a fixed order, without fused multiply-add (Rust does not fuse
+unless asked).
+
+**Scope.** Rust's usual targets. Targets that compute `f64` on the x87 unit, such as
+`i586-unknown-linux-gnu`, round intermediate results differently and are excluded; so is any
+build that enables fast-math or fused operations by other means.
+
+**Verified.** The benchmark's three integer-generated images (800x750, 1600x1500, 5500x8000)
+give the same stream hashes, `benches/hashes.txt`, on the three GitHub-hosted runners, with `cargo
+bench --bench codec -- 1 1 --check` (one thread) and `-- 0 1 --check` (one thread per core):
+
+| run | commit | runners | result |
+|---|---|---|---|
+| [41882431956](https://github.com/ybdn/wsq-codec/actions/runs/41882431956), PR #51 | `fa82067` | ubuntu-latest, macos-latest, windows-latest | both `--check` steps pass; the logs show `5ce22c9ec2bea4ee`, `9a25b2791f2f4f27` and `a3949f99443cd4ba` on each |
+| [41886526469](https://github.com/ybdn/wsq-codec/actions/runs/41886526469), `develop` | `15cd780` | same | both `--check` steps pass; the logs read (Windows in full, Linux and macOS for the larger images) show the same hashes |
+| [41889317306](https://github.com/ybdn/wsq-codec/actions/runs/41889317306), `develop` | `34fbc49` | same, plus a 32-bit x86 job (`i686-unknown-linux-gnu`, release tests) | all 8 jobs succeed; the job logs were not read |
+
+Those runs also pass `tests/nbis.rs`, the byte-for-byte comparison with NBIS 5.0.0 on the
+fixtures, on the three operating systems. The hashes of the three runners are equal to each
+other and to the ones recorded on Linux x86-64; the macOS runner's `/opt/homebrew` paths in
+its log suggest Apple silicon (AArch64), which would make it a second architecture, but the
+logs do not state it, and neither do they state the Windows runner's architecture.
+
+**Not verified.** Any other architecture or operating system than those runners (AArch64 Linux,
+big-endian, RISC-V, WebAssembly: `wasm32-unknown-unknown` is only built in CI, never run); a
+compiler other than the stable toolchain and 1.85 of the matrix. Run `cert compare` between two
+platforms' outputs on NIST's images before each submission, as planned above.
