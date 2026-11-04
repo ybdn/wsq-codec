@@ -376,32 +376,37 @@ fn render<'o>(
         trees,
         coeffs,
     } = quantized;
-    let width = info.width;
-    let n = width * info.height;
+    let (width, height) = (info.width, info.height);
     let threads = crate::thread_count(options.threads);
-    let data = wavelet::buffer(&mut scratch.image, n)?;
-    quant::unquantize(&coeffs, &quant, width, &trees.q, data, threads);
+    let mut data = scratch.image.rows(width, height, threads)?;
+    quant::unquantize(&coeffs, &quant, &trees.q, &mut data, threads);
     drop(coeffs);
-    let tmp = wavelet::buffer(&mut scratch.tmp, n)?;
+    let mut tmp = scratch.tmp.rows(width, height, threads)?;
     wavelet::reconstruct(
-        data,
-        tmp,
-        width,
+        &mut data,
+        &mut tmp,
         &trees.w,
         &transform.lo,
         &transform.hi,
         threads,
     );
-    wavelet::release(&mut scratch.tmp, scratch.keep);
+    drop(tmp);
+    scratch.tmp.release(scratch.keep);
 
-    par::zip_chunks(data, output(n)?, threads, |data, pixels| {
-        for (p, &v) in pixels.iter_mut().zip(data) {
-            let v = (f64::from(v * frame.r_scale + frame.m_shift) + 0.5) as f32;
-            // Also maps NaN, from absurd tables, to 0.
-            *p = v.clamp(0.0, 255.0) as u8;
+    let pixels = output(width * height)?;
+    let mut rows: Vec<_> = data.iter().zip(pixels.chunks_mut(width)).collect();
+    par::row_groups(&mut rows, width * height, threads, |_, rows| {
+        for (data, pixels) in rows.iter_mut() {
+            for (p, &v) in pixels.iter_mut().zip(data.iter()) {
+                let v = (f64::from(v * frame.r_scale + frame.m_shift) + 0.5) as f32;
+                // Also maps NaN, from absurd tables, to 0.
+                *p = v.clamp(0.0, 255.0) as u8;
+            }
         }
     });
-    wavelet::release(&mut scratch.image, scratch.keep);
+    drop(rows);
+    drop(data);
+    scratch.image.release(scratch.keep);
     Ok(info)
 }
 

@@ -79,25 +79,25 @@ pub(crate) fn parts(threads: usize, items: usize) -> usize {
     threads.min(items / MIN_ITEMS).max(1)
 }
 
-/// Calls `f` on matching chunks of `src` and `dst`, which have the same
-/// length, on up to `threads` threads.
-pub(crate) fn zip_chunks<A: Sync, B: Send>(
-    src: &[A],
-    dst: &mut [B],
+/// Calls `f(first, group)` on consecutive groups of `rows`, `first` being
+/// the index of the group's first row, on up to `threads` threads.
+/// `items`, the work all the rows stand for, decides how many threads are
+/// worth it.
+pub(crate) fn row_groups<R: Send>(
+    rows: &mut [R],
+    items: usize,
     threads: usize,
-    f: impl Fn(&[A], &mut [B]) + Sync,
+    f: impl Fn(usize, &mut [R]) + Sync,
 ) {
-    debug_assert_eq!(src.len(), dst.len());
-    let parts = parts(threads, src.len());
+    let parts = parts(threads, items);
     if parts == 1 {
-        return f(src, dst);
+        return f(0, rows);
     }
-    let size = src.len().div_ceil(parts);
+    let size = rows.len().div_ceil(parts).max(1);
     let f = &f;
     std::thread::scope(|scope| {
-        for (src, dst) in src.chunks(size).zip(dst.chunks_mut(size)) {
-            // Dropping the task is fine: the scope joins it.
-            drop(spawn(scope, move || f(src, dst)));
+        for (i, group) in rows.chunks_mut(size).enumerate() {
+            drop(spawn(scope, move || f(i * size, group)));
         }
     });
 }
@@ -196,8 +196,13 @@ mod tests {
         let src: Vec<u32> = (0..MIN_ITEMS as u32 * 3).collect();
         let mut dst = vec![0; src.len()];
         without_threads(|| {
-            zip_chunks(&src, &mut dst, 4, |s, d| {
-                d.iter_mut().zip(s).for_each(|(d, s)| *d = s + 1)
+            let mut rows: Vec<&mut [u32]> = dst.chunks_mut(1000).collect();
+            row_groups(&mut rows, src.len(), 4, |first, rows| {
+                for (i, row) in rows.iter_mut().enumerate() {
+                    for (j, d) in row.iter_mut().enumerate() {
+                        *d = src[(first + i) * 1000 + j] + 1;
+                    }
+                }
             })
         });
         assert!(dst.iter().zip(&src).all(|(d, s)| *d == s + 1));

@@ -169,9 +169,9 @@ The fastest of 5 runs on generated images, in memory, on a 4-core cloud x86-64 m
 
 | image | encode, 1 thread | decode, 1 thread | encode, 4 threads | decode, 4 threads |
 |---|---|---|---|---|
-| 500 ppi rolled print, 800×750 | 11 ms | 11 ms | 13 ms | 11 ms |
-| 1000 ppi, 1600×1500 | 49 ms | 45 ms | 30 ms | 34 ms |
-| 1000 ppi palm, 5500×8000 | 1.07 s | 1.08 s | 0.55 s | 0.62 s |
+| 500 ppi rolled print, 800×750 | 11 ms | 10 ms | 10 ms | 9 ms |
+| 1000 ppi, 1600×1500 | 43 ms | 38 ms | 23 ms | 19 ms |
+| 1000 ppi palm, 5500×8000 | 1.13 s | 1.06 s | 0.45 s | 0.41 s |
 
 `docs/nbis-comparison.md` compares speed and memory with NBIS 5.0.0 (distributions over repeated
 calls, one process per call, one and four threads), with the protocol, the conditions and the
@@ -179,10 +179,13 @@ limits; `bench/nbis-compare` repeats it. It is a measurement on synthetic images
 a claim for other cases.
 
 The work stays on the calling thread unless `EncodeOptions::threads` or
-`DecodeOptions::threads` asks for more (0 means one per core). The wavelet transform is split
-by rows and by columns, quantization by subbands, and the conversions between pixels and
-floats by chunks; each value goes through the same arithmetic either way, so the result is
-unchanged. Huffman coding stays on one thread. Threads pay off on large images only.
+`DecodeOptions::threads` asks for more (0 means one per core). The wavelet transform starts its
+threads once per image and splits every pass by rows; quantization, dequantization and the
+subband statistics are split by subbands or rows, the three Huffman blocks are coded and decoded
+side by side, and the image-sized buffers are allocated in bands, each zeroed by its own thread.
+Each value goes through the same arithmetic either way, so the result is unchanged. Threads pay
+off on large images; on small ones they cost nothing. `Decoder` and `Encoder` keep their buffers
+from one image to the next, which spares a batch of images their allocation.
 
 ## Quality
 

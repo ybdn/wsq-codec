@@ -9,6 +9,9 @@
 - With several threads, the decoder finds the Huffman blocks by their markers and decodes them
   side by side, each block's coefficients growing fallibly. A stream that fails on that path is
   read again on one thread, so errors are unchanged.
+- The image-sized buffers of the encoder and decoder are held in bands of rows, each allocated
+  fallibly and zeroed by its own thread when several are asked for: the serial zeroing that
+  fallible allocation brought no longer slows multithreaded runs down. Output unchanged.
 - `decode_into` decodes into a buffer the caller provides, and `WsqDecoder::read_image` uses it
   instead of copying the pixels. `Decoder` and `Encoder` keep their working buffers from one
   image to the next (the peak memory of `decode` and `encode` is unchanged; a `Decoder` keeps

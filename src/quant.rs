@@ -33,7 +33,7 @@ pub(crate) struct QuantParams {
 ///
 /// The sums run row by row, left to right, over the window only, as in
 /// the reference implementation.
-fn subband_stats(data: &[f32], width: usize, node: &QNode, cropped: bool) -> (f32, f32) {
+fn subband_stats(data: &[&[f32]], node: &QNode, cropped: bool) -> (f32, f32) {
     let (skipx, skipy, lenx, leny) = if cropped {
         (
             node.lenx / 8,
@@ -48,7 +48,7 @@ fn subband_stats(data: &[f32], width: usize, node: &QNode, cropped: bool) -> (f3
     let mut ssq = 0.0f32;
     let mut largest = 0.0f32;
     for (i, row) in (node.y..node.y + node.leny).enumerate() {
-        let line = &data[row * width + node.x..row * width + node.x + node.lenx];
+        let line = &data[row][node.x..node.x + node.lenx];
         largest = line.iter().fold(largest, |m, &v| m.max(v.abs()));
         if (skipy..skipy + leny).contains(&i) {
             for &v in &line[skipx..skipx + lenx] {
@@ -76,17 +76,12 @@ pub(crate) struct Stats {
 /// image, on up to `threads` threads. Each subband is computed on one
 /// thread exactly as on a single one, so the result does not depend on
 /// the threads.
-pub(crate) fn variances(
-    data: &[f32],
-    width: usize,
-    q_tree: &[QNode; Q_TREE_LEN],
-    threads: usize,
-) -> Stats {
+pub(crate) fn variances(data: &[&[f32]], q_tree: &[QNode; Q_TREE_LEN], threads: usize) -> Stats {
     let mut var = [0.0f32; Q_TREE_LEN];
     let mut largest = [0.0f32; Q_TREE_LEN];
     let mut vsum = 0.0f32;
     for (cnt, node) in q_tree.iter().enumerate().take(4) {
-        (var[cnt], largest[cnt]) = subband_stats(data, width, node, true);
+        (var[cnt], largest[cnt]) = subband_stats(data, node, true);
         vsum += var[cnt];
     }
     // Images with little energy in the lowest bands use whole subbands.
@@ -100,7 +95,7 @@ pub(crate) fn variances(
     order.sort_by_key(|&i| std::cmp::Reverse(q_tree[from + i].area()));
     let total = q_tree[from..NUM_SUBBANDS].iter().map(QNode::area).sum();
     let stats = par::map_dynamic(&order, par::parts(threads, total), |i| {
-        subband_stats(data, width, &q_tree[from + i], cropped)
+        subband_stats(data, &q_tree[from + i], cropped)
     });
     for (i, (v, m)) in stats.into_iter().enumerate() {
         (var[from + i], largest[from + i]) = (v, m);
@@ -207,8 +202,7 @@ pub(crate) fn limit_bin_widths(params: &mut QuantParams, stats: &Stats) {
 /// Appends the quantized coefficients of subband `cnt` to `out`, in
 /// row-major order.
 fn quantize_subband(
-    data: &[f32],
-    width: usize,
+    data: &[&[f32]],
     node: &QNode,
     params: &QuantParams,
     cnt: usize,
@@ -216,8 +210,8 @@ fn quantize_subband(
 ) {
     let qbin = params.qbss[cnt];
     let zbin = (f64::from(params.qzbs[cnt]) / 2.0) as f32;
-    for row in node.y..node.y + node.leny {
-        for &v in &data[row * width + node.x..row * width + node.x + node.lenx] {
+    for row in &data[node.y..node.y + node.leny] {
+        for &v in &row[node.x..node.x + node.lenx] {
             let q = if -zbin <= v && v <= zbin {
                 0.0
             } else if v > 0.0 {
@@ -234,8 +228,7 @@ fn quantize_subband(
 /// order, skipping dropped subbands. Runs of consecutive subbands go to
 /// up to `threads` threads.
 pub(crate) fn quantize(
-    data: &[f32],
-    width: usize,
+    data: &[&[f32]],
     q_tree: &[QNode; Q_TREE_LEN],
     params: &QuantParams,
     threads: usize,
@@ -248,7 +241,7 @@ pub(crate) fn quantize(
         let len = subbands.iter().map(|&c| q_tree[c].area()).sum();
         let mut out = mem::with_capacity(len)?;
         for &c in subbands {
-            quantize_subband(data, width, &q_tree[c], params, c, &mut out);
+            quantize_subband(data, &q_tree[c], params, c, &mut out);
         }
         Ok(out)
     };
@@ -308,9 +301,8 @@ impl QuantTable {
 pub(crate) fn unquantize(
     coeffs: &[Vec<i16>],
     table: &QuantTable,
-    width: usize,
     q_tree: &[QNode; Q_TREE_LEN],
-    data: &mut [f32],
+    data: &mut [&mut [f32]],
     threads: usize,
 ) {
     /// A kept subband and where its coefficients start.
@@ -337,9 +329,9 @@ pub(crate) fn unquantize(
     }
     let c = table.bin_center;
     let coeffs = Runs::new(coeffs);
-    let fill = |first_row: usize, rows: &mut [f32]| {
+    let fill = |first_row: usize, rows: &mut [&mut [f32]]| {
         let mut joined = Vec::new();
-        for (i, line) in rows.chunks_mut(width).enumerate() {
+        for (i, line) in rows.iter_mut().enumerate() {
             let row = first_row + i;
             line.fill(0.0);
             for k in kept
@@ -359,18 +351,8 @@ pub(crate) fn unquantize(
             }
         }
     };
-    let height = data.len().checked_div(width).unwrap_or(0);
-    let parts = par::parts(threads, data.len());
-    if parts == 1 {
-        return fill(0, data);
-    }
-    let band = height.div_ceil(parts);
-    let fill = &fill;
-    std::thread::scope(|scope| {
-        for (i, rows) in data.chunks_mut(band * width).enumerate() {
-            drop(par::spawn(scope, move || fill(i * band, rows)));
-        }
-    });
+    let items = data.len() * data.first().map_or(0, |row| row.len());
+    par::row_groups(data, items, threads, fill);
 }
 
 /// Coefficients held in consecutive runs, read as one sequence.

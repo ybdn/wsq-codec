@@ -541,8 +541,8 @@ fn synthesis_plan(n: usize, lo: &[f32], hi: &[f32], inv: bool) -> Plan {
 /// next.
 #[derive(Default)]
 pub(crate) struct Scratch {
-    pub image: Vec<f32>,
-    pub tmp: Vec<f32>,
+    pub image: Bands,
+    pub tmp: Bands,
     /// Keeps the buffers once an image is done. Without it each buffer is
     /// freed as soon as it is no longer needed, which keeps the peak
     /// memory of a single image down.
@@ -559,13 +559,6 @@ impl Scratch {
     }
 }
 
-/// Frees `buf` unless `keep` is set.
-pub(crate) fn release(buf: &mut Vec<f32>, keep: bool) {
-    if !keep {
-        *buf = Vec::new();
-    }
-}
-
 impl std::fmt::Debug for Scratch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Scratch")
@@ -574,15 +567,75 @@ impl std::fmt::Debug for Scratch {
     }
 }
 
-/// The first `n` samples of `buf`, grown to them if needed. Whatever the
-/// samples hold is left there.
-pub(crate) fn buffer(buf: &mut Vec<f32>, n: usize) -> Result<&mut [f32], OutOfMemory> {
-    if buf.len() < n {
-        // Freed first, so that the old and new buffers never coexist.
-        *buf = Vec::new();
-        *buf = mem::filled(n, 0.0)?;
+/// An image-sized buffer held in bands of whole rows, each band its own
+/// allocation.
+///
+/// Filling a fresh image-sized allocation costs mostly the first touch of
+/// its pages, and safe code can only fill a vector from one thread. Bands
+/// let each thread allocate, fallibly, and zero its own share, side by
+/// side.
+#[derive(Default)]
+pub(crate) struct Bands {
+    bands: Vec<Vec<f32>>,
+}
+
+impl Bands {
+    /// Samples held.
+    pub fn len(&self) -> usize {
+        self.bands.iter().map(Vec::len).sum()
     }
-    Ok(&mut buf[..n])
+
+    /// `height` rows of `width` samples. They are carved from the bands
+    /// already held when those hold enough whole rows, and keep whatever
+    /// they hold; otherwise new bands are allocated and zeroed on up to
+    /// `threads` threads.
+    pub fn rows(
+        &mut self,
+        width: usize,
+        height: usize,
+        threads: usize,
+    ) -> Result<Vec<&mut [f32]>, OutOfMemory> {
+        let width = width.max(1);
+        let held: usize = self.bands.iter().map(|band| band.len() / width).sum();
+        if held < height {
+            // Freed first, so that the old and new bands never coexist.
+            self.bands = Vec::new();
+            self.bands = allocate(width, height, threads)?;
+        }
+        Ok(self
+            .bands
+            .iter_mut()
+            .flat_map(|band| band.chunks_exact_mut(width))
+            .take(height)
+            .collect())
+    }
+
+    /// Frees the bands unless `keep` is set.
+    pub fn release(&mut self, keep: bool) {
+        if !keep {
+            self.bands = Vec::new();
+        }
+    }
+}
+
+/// Zeroed bands for `height` rows of `width` samples, one per thread.
+fn allocate(width: usize, height: usize, threads: usize) -> Result<Vec<Vec<f32>>, OutOfMemory> {
+    let parts = par::parts(threads, width * height);
+    let rows = height.div_ceil(parts).max(1);
+    let sizes: Vec<usize> = (0..height)
+        .step_by(rows)
+        .map(|y| rows.min(height - y) * width)
+        .collect();
+    if sizes.len() <= 1 {
+        return sizes.iter().map(|&n| mem::filled(n, 0.0)).collect();
+    }
+    std::thread::scope(|scope| {
+        let tasks: Vec<_> = sizes
+            .iter()
+            .map(|&n| par::spawn(scope, move || mem::filled(n, 0.0)))
+            .collect();
+        tasks.into_iter().map(par::Task::join).collect()
+    })
 }
 
 /// One filtering pass over a `lenx` by `leny` region: between the region
@@ -599,14 +652,14 @@ struct Pass {
     leny: usize,
 }
 
-/// Rows of a buffer `width` samples wide, each behind its own lock so that
-/// threads can share the buffer out row by row, differently in each pass.
-fn lock_rows(data: &mut [f32], width: usize) -> Vec<RwLock<&mut [f32]>> {
-    data.chunks_mut(width).map(RwLock::new).collect()
+/// Rows of a buffer, each behind its own lock so that threads can share
+/// the buffer out row by row, differently in each pass.
+fn lock_rows<'a>(rows: &'a mut [&mut [f32]]) -> Vec<RwLock<&'a mut [f32]>> {
+    rows.iter_mut().map(|row| RwLock::new(&mut **row)).collect()
 }
 
-/// Runs `passes` in order over `data` and `tmp`, both `width` samples
-/// wide, on up to `threads` threads started once for all of them.
+/// Runs `passes` in order over the rows of `data` and `tmp`, on up to
+/// `threads` threads started once for all of them.
 ///
 /// Every pass splits its output rows between the threads, as many as the
 /// pass is worth, and the threads wait for each other between passes. A
@@ -614,14 +667,14 @@ fn lock_rows(data: &mut [f32], width: usize) -> Vec<RwLock<&mut [f32]>> {
 /// share of the output rows from all the input rows. Either way each
 /// output sample goes through the same products and sums as on a single
 /// thread.
-fn run(passes: &[Pass], data: &mut [f32], tmp: &mut [f32], width: usize, threads: usize) {
+fn run(passes: &[Pass], data: &mut [&mut [f32]], tmp: &mut [&mut [f32]], threads: usize) {
     let wanted = passes
         .iter()
         .map(|p| shares(threads, p.leny, p.lenx))
         .max()
         .unwrap_or(1);
-    let image = lock_rows(data, width);
-    let scratch = lock_rows(tmp, width);
+    let image = lock_rows(data);
+    let scratch = lock_rows(tmp);
     let work = |id: usize, workers: usize, barrier: Option<&Barrier>| {
         for pass in passes {
             run_share(
@@ -712,11 +765,10 @@ fn run_share<'a>(
 /// Forward transform of the whole image in place, one wavelet tree node
 /// at a time, on up to `threads` threads.
 ///
-/// `tmp`, as long as `data`, is scratch space, whatever it holds.
+/// `tmp`, with as many rows as `data`, is scratch space, whatever it holds.
 pub(crate) fn decompose(
-    data: &mut [f32],
-    tmp: &mut [f32],
-    width: usize,
+    data: &mut [&mut [f32]],
+    tmp: &mut [&mut [f32]],
     tree: &[WNode; W_TREE_LEN],
     threads: usize,
 ) {
@@ -736,17 +788,16 @@ pub(crate) fn decompose(
             });
         }
     }
-    run(&passes, data, tmp, width, threads);
+    run(&passes, data, tmp, threads);
 }
 
 /// Inverse transform of the whole image in place, on up to `threads`
 /// threads. `lo` and `hi` are the synthesis filters as read from the
-/// transform table. `tmp`, as long as `data`, is scratch space, whatever it
-/// holds.
+/// transform table. `tmp`, with as many rows as `data`, is scratch space,
+/// whatever it holds.
 pub(crate) fn reconstruct(
-    data: &mut [f32],
-    tmp: &mut [f32],
-    width: usize,
+    data: &mut [&mut [f32]],
+    tmp: &mut [&mut [f32]],
     tree: &[WNode; W_TREE_LEN],
     lo: &[f32],
     hi: &[f32],
@@ -768,5 +819,5 @@ pub(crate) fn reconstruct(
             });
         }
     }
-    run(&passes, data, tmp, width, threads);
+    run(&passes, data, tmp, threads);
 }
