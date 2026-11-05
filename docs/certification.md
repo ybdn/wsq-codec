@@ -167,9 +167,9 @@ bench --bench codec -- 1 1 --check` (one thread) and `-- 0 1 --check` (one threa
 
 | run | commit | runners | result |
 |---|---|---|---|
-| [41882431956](https://github.com/ybdn/wsq-codec/actions/runs/41882431956), PR #51 | `fa82067` | ubuntu-latest, macos-latest, windows-latest | both `--check` steps pass; the logs show `5ce22c9ec2bea4ee`, `9a25b2791f2f4f27` and `a3949f99443cd4ba` on each |
-| [41886526469](https://github.com/ybdn/wsq-codec/actions/runs/41886526469), `develop` | `15cd780` | same | both `--check` steps pass; the logs read (Windows in full, Linux and macOS for the larger images) show the same hashes |
-| [41889317306](https://github.com/ybdn/wsq-codec/actions/runs/41889317306), `develop` | `34fbc49` | same, plus a 32-bit x86 job (`i686-unknown-linux-gnu`, release tests) | all 8 jobs succeed; the job logs were not read |
+| [41882431956](https://github.com/ybdn-ei/wsq-codec/actions/runs/41882431956), PR #51 | `fa82067` | ubuntu-latest, macos-latest, windows-latest | both `--check` steps pass; the logs show `5ce22c9ec2bea4ee`, `9a25b2791f2f4f27` and `a3949f99443cd4ba` on each |
+| [41886526469](https://github.com/ybdn-ei/wsq-codec/actions/runs/41886526469), `develop` | `15cd780` | same | both `--check` steps pass; the logs read (Windows in full, Linux and macOS for the larger images) show the same hashes |
+| [41889317306](https://github.com/ybdn-ei/wsq-codec/actions/runs/41889317306), `develop` | `34fbc49` | same, plus a 32-bit x86 job (`i686-unknown-linux-gnu`, release tests) | all 8 jobs succeed; the job logs were not read |
 
 Those runs also pass `tests/nbis.rs`, the byte-for-byte comparison with NBIS 5.0.0 on the
 fixtures, on the three operating systems. The hashes of the three runners are equal to each

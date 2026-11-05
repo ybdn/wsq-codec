@@ -1,6 +1,6 @@
 # wsq-codec
 
-[![CI](https://github.com/ybdn/wsq-codec/actions/workflows/ci.yml/badge.svg)](https://github.com/ybdn/wsq-codec/actions/workflows/ci.yml)
+[![CI](https://github.com/ybdn-ei/wsq-codec/actions/workflows/ci.yml/badge.svg)](https://github.com/ybdn-ei/wsq-codec/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/wsq-codec.svg)](https://crates.io/crates/wsq-codec)
 [![docs.rs](https://img.shields.io/docsrs/wsq-codec)](https://docs.rs/wsq-codec)
 [![license: MIT](https://img.shields.io/crates/l/wsq-codec.svg)](LICENSE)
@@ -83,7 +83,7 @@ the first registration wins). `WsqDecoder` honours `image::Limits`: `max_alloc` 
 ## Command line
 
 The `wsq` tool (crate `wsq-cli`, in `cli/`) converts between binary PGM and WSQ. Install it with
-`cargo install wsq-cli` (or `cargo install --git https://github.com/ybdn/wsq-codec wsq-cli`);
+`cargo install wsq-cli` (or `cargo install --git https://github.com/ybdn-ei/wsq-codec wsq-cli`);
 `wsq --help` lists the commands:
 
 ```sh

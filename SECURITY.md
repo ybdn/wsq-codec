@@ -12,7 +12,7 @@ Only the latest 0.x release receives fixes.
 Do not open a public issue. Report it privately, in either way:
 
 - through GitHub's private vulnerability reporting: the "Report a vulnerability" button on the
-  [Security tab](https://github.com/ybdn/wsq-codec/security/advisories/new) of the repository;
+  [Security tab](https://github.com/ybdn-ei/wsq-codec/security/advisories/new) of the repository;
 - or by email to **security@ybdn.io**.
 
 Please include:
