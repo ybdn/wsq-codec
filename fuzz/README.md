@@ -46,5 +46,5 @@ Never add real fingerprints, or data from a real transaction, as seeds.
 
 [ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) builds the targets with
 `.clusterfuzzlite/build.sh`. `.github/workflows/cflite_pr.yml` runs them for 5 minutes on each
-pull request that changes code, and `.github/workflows/cflite_batch.yml` for an hour every
+pull request that changes code, and `.github/workflows/scheduled.yml` for an hour every
 week. Neither keeps the corpus between runs yet (that needs a storage repository).

@@ -1,51 +1,90 @@
+# Pull requests into develop/main only: a merge replays nothing, the PR was
+# checked. `changes` classifies the diff; every job is skipped when its files
+# did not change, and `ci` is the one status to require. On a release
+# (workflow_call) everything runs.
 name: CI
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
+    branches: [develop, main]
   workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: test (${{ matrix.os }}, ${{ matrix.toolchain }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        toolchain: [stable, "1.85"]
-        include:
-          - os: macos-latest
-            toolchain: stable
-          - os: windows-latest
-            toolchain: stable
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists the files of the pull request
+    outputs:
+      rust: ${{ github.event_name != 'pull_request' || steps.filter.outputs.rust == 'true' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            rust:
+              - "src/**"
+              - "benches/**"
+              - "tests/**"
+              - "examples/**"
+              - "cli/**"
+              - "fuzz/**"
+              - "Cargo.*"
+              - "deny.toml"
+              - ".github/workflows/**"
+
+  core:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    uses: ybdn-ei/.github/.github/workflows/rust-ci.yml@main
+    with:
+      msrv: "1.85"
+      feature-sets: '["", "--features image"]'
+      extra-test-packages: -p wsq-cli
+    secrets: inherit
+
+  bench:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: ${{ matrix.toolchain }}
-      - run: cargo test --all-targets
-      - run: cargo test --doc
-      - run: cargo test --all-targets --features image
-      - run: cargo test --doc --features image
-      - run: cargo test -p wsq-cli
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo bench --bench codec -- 1 1 --check
       - run: cargo bench --bench codec -- 0 1 --check
       - run: cargo bench --bench quality -- --runs 1
 
   wasm:
     name: build (wasm32-unknown-unknown)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo build --target wasm32-unknown-unknown
       - run: cargo build --target wasm32-unknown-unknown --features image
 
@@ -53,38 +92,42 @@ jobs:
   # "capacity overflow" panic (see the allocation notes in `src/mem.rs`).
   i686:
     name: test (i686-unknown-linux-gnu)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           targets: i686-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
       - run: cargo test --release --target i686-unknown-linux-gnu --lib --tests
 
-  lint:
+  package:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
-          components: clippy, rustfmt
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo clippy --all-targets --features image -- -D warnings
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy -p wsq-cli --all-targets -- -D warnings
-      - run: cargo doc --no-deps --features image
-        env:
-          RUSTDOCFLAGS: -D warnings
       - run: cargo package
 
   deny:
     name: cargo-deny
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
@@ -92,3 +135,14 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
+
+  # The one status to read: green when every needed job passed or was skipped.
+  ci:
+    if: ${{ !cancelled() }}
+    needs: [changes, core, bench, wasm, i686, package, deny]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo ok
