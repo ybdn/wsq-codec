@@ -5,6 +5,10 @@ updates:
     target-branch: develop
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      cargo:
+        patterns: ["*"]
     commit-message:
       prefix: "chore"
   - package-ecosystem: github-actions
@@ -12,5 +16,8 @@ updates:
     target-branch: develop
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
     commit-message:
       prefix: "ci"

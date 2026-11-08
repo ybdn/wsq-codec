@@ -1,20 +1,20 @@
-name: ClusterFuzzLite (scheduled)
-
-# A longer run of the cargo-fuzz targets, every week and on demand. See
-# fuzz/README.md.
+# Weekly: a long fuzzing run (see fuzz/README.md) and the advisories (cargo-deny).
+name: Scheduled
 
 on:
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
 
-permissions: read-all
+permissions:
+  contents: read
 
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
@@ -28,3 +28,13 @@ jobs:
           mode: batch
           sanitizer: address
           report-unreproducible-crashes: false
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+          arguments: --all-features
