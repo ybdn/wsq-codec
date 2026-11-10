@@ -189,9 +189,9 @@ benchmark's stream hashes were also executed on:
 
 | target | how | date | result |
 |---|---|---|---|
-| `aarch64-unknown-linux-gnu` | CI job `aarch64`, `ubuntu-24.04-arm`, `cargo test --release --lib --tests` and both `bench --check` | pending the first CI run | to fill in: run, commit, `uname -m` |
-| `wasm32-wasip1` | CI job `wasi`, wasmtime 50.0.1, same commands. Run by hand on 10 November 2026 (wasmtime 50.0.1, Rust 1.97.0, x86-64 host): all test binaries pass, and both `bench --check` print the three hashes of `benches/hashes.txt` | 10 November 2026 (by hand) | pass; CI run to fill in |
-| `s390x-unknown-linux-gnu` (big-endian) | CI job `s390x` of `scheduled.yml` (`cross`, QEMU), weekly and on demand: tests only. Run by hand on 10 November 2026 without `cross`, with `qemu-s390x` 8.2 user emulation: tests pass, and `bench --check` (one thread) prints the three hashes | 10 November 2026 (by hand) | pass; CI run to fill in |
+| `aarch64-unknown-linux-gnu` | CI job `aarch64`, `ubuntu-24.04-arm`, `cargo test --release --lib --tests` and both `bench --check` | 10 November 2026 | pass: run [42881844032](https://github.com/ybdn-ei/wsq-codec/actions/runs/42881844032), commit `effbbc5`, runner label `ubuntu-24.04-arm`; the three hashes of `benches/hashes.txt` with 1 and 0 threads |
+| `wasm32-wasip1` | CI job `wasi`, wasmtime 50.0.1, same commands. Run by hand on 10 November 2026 (wasmtime 50.0.1, Rust 1.97.0, x86-64 host): all test binaries pass, and both `bench --check` print the three hashes of `benches/hashes.txt` | 10 November 2026 (by hand and in CI) | pass; CI run [42881844032](https://github.com/ybdn-ei/wsq-codec/actions/runs/42881844032), commit `effbbc5` |
+| `s390x-unknown-linux-gnu` (big-endian) | CI job `s390x` of `scheduled.yml` (`cross`, QEMU), weekly and on demand: tests only. Run by hand on 10 November 2026 without `cross`, with `qemu-s390x` 8.2 user emulation: tests pass, and `bench --check` (one thread) prints the three hashes | 10 November 2026 (by hand and in CI) | pass; tests in CI run [42880561801](https://github.com/ybdn-ei/wsq-codec/actions/runs/42880561801) (`cross`, commit `93533b8`) |
 
 WASI has no threads: `src/par.rs` falls back to the calling thread, so the `threads` option
 has no effect there, and the output is the same. Every job prints `uname -m` and `rustc -vV`

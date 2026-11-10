@@ -22,6 +22,15 @@
   weekly workflow runs the tests on big-endian `s390x` under QEMU (`cross`). Each job prints
   `uname -m` and `rustc -vV`. The README lists the verified targets. No change to the codec;
   the `par` unit test no longer expects a real thread on WASI, which has none.
+- Quality benchmark, second version (#43): `cargo bench --bench quality` can also measure NIST's
+  NFIQ 2 score (`--nfiq2 PATH`) and NBIS's minutiae (`--mindtct PATH`) and `bozorth3` match
+  score (`--bozorth3 PATH`) of the decoded image against the original, for the conformant
+  encoder, the experimental one and the conformant one at equal size. The tools are external
+  programs run as processes, each optional ("not run" when absent), and the crate gains no
+  dependency. Three synthetic ridge patterns (`--fingerprint-like`, generated) give the tools
+  something to find; images of `WSQ_QUALITY_DIR` are now reported in aggregate only, with no
+  file name and no per-file row, and the CSV has six more columns. `docs/quality.md` has the
+  build instructions and the first figures, of 10 November 2026, on the synthetic patterns only.
 
 ## 0.2.0
 

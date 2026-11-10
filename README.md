@@ -250,6 +250,28 @@ streams NBIS wrote elsewhere. `WSQ_QUALITY_DIR` names a local directory of PGM f
 too; it stays outside the repository. `--optimized` also measures the `Optimized` profile
 (#42, #44), which hits the requested rate, against the conformant one at equal size. `docs/quality.md` holds the tables, with the conditions of measurement.
 
+PSNR does not say whether a decoded image still matches, so the same tool can also run two
+external programs (each optional, none a dependency of the crate): NIST's NFIQ 2 score
+(`--nfiq2 PATH`) and NBIS's `mindtct` and `bozorth3` (`--mindtct PATH --bozorth3 PATH`), which
+give the change in NFIQ 2, the change in the number of minutiae and the match score of the
+decoded image against the original, with the original's own score as the reference. Without a
+tool, its columns read "not run". `docs/quality.md` explains how to build them.
+
+What was measured, on 10 November 2026: three **synthetic** ridge patterns (generated, not
+fingerprints), 640x704 at 500 ppi, at 0.5 to 2.25 bits per pixel, with NFIQ 2 2.3.1 and NBIS
+5.0.0 (36 reconstructions). NFIQ 2 changed by -9 to +2 points from the original to the decoded
+image, the decoded image's minutiae matched the original's at 74% to 99% of the original's
+score against itself, and the experimental encoder and the conformant encoder at equal size
+were not distinguishable on these measures. Three patterns that are not fingerprints say
+nothing about real prints, on which this was **not measured**: no real fingerprint may be
+committed or published, so run it on a local directory (`WSQ_QUALITY_DIR`, reported in
+aggregate only) and read the figures there.
+
+```sh
+cargo bench --bench quality -- --optimized --nfiq2 /path/to/nfiq2 \
+  --mindtct /path/to/mindtct --bozorth3 /path/to/bozorth3
+```
+
 ## Contributing and security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks to run and the branch flow, and
