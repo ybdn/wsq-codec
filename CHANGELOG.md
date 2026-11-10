@@ -2,16 +2,6 @@
 
 ## Unreleased
 
-- The certified part is split out as the `wsq-certified` crate (`certified/`, 1.0.0, #46): the
-  decoder, the conformant encoder and `inspect`, versioned with the FBI certificate, with a pinned
-  compiler (`certified/rust-toolchain.toml`) and a CI guard that fails a pull request changing it
-  without raising its version. `wsq-codec` depends on it at the exact version `=1.0.0` and
-  re-exports it: its public API, the decoded pixels and the conformant encoder's bytes do not
-  change (`Image`, `Decoder`, `EncodeOptions` and `Encoder` are `wsq-codec`'s own types over the
-  certified ones; the `Optimized` search stays in `wsq-codec`). `wsq cert` runs `wsq-certified`
-  directly and `submission.txt` names its version. `docs/certification.md` has the design, the
-  compiler decision and the submission procedure. The NIST submission itself is not part of this.
-
 ## 1.0.0
 
 The public API is reviewed and frozen (#45); `docs/api-1.0.md` records each decision. From this
@@ -118,6 +108,15 @@ Carried over from the work merged since 0.2.0:
   maturin from `python/` (`decode`, `read_info`, `encode`, NumPy `uint8` arrays, exceptions
   derived from `ValueError`, type stubs), with wheels for Linux, macOS and Windows built in CI and
   published by the release workflow. The Rust crate is unchanged.
+- The certified part is split out as the `wsq-certified` crate (`certified/`, 1.0.0, #46): the
+  decoder, the conformant encoder and `inspect`, versioned with the FBI certificate, with a pinned
+  compiler (`certified/rust-toolchain.toml`) and a CI guard that fails a pull request changing it
+  without raising its version. `wsq-codec` depends on it at the exact version `=1.0.0` and
+  re-exports it: its public API, the decoded pixels and the conformant encoder's bytes do not
+  change (`Image`, `Decoder`, `EncodeOptions` and `Encoder` are `wsq-codec`'s own types over the
+  certified ones; the `Optimized` search stays in `wsq-codec`). `wsq cert` runs `wsq-certified`
+  directly and `submission.txt` names its version. `docs/certification.md` has the design, the
+  compiler decision and the submission procedure. The NIST submission itself is not part of this.
 
 ## 0.2.0
 
