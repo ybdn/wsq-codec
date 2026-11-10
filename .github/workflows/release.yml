@@ -1,10 +1,11 @@
 name: Release
 
-# Publishes to crates.io through Trusted Publishing (OIDC, no stored token) when a `v*` tag
-# is pushed on `main`, and the WebAssembly package to npm (`wsq-codec`, with provenance, also
-# through Trusted Publishing). A manual run does every check, `cargo publish --dry-run` and
-# `npm publish --dry-run`, and never publishes: publishing is irreversible and only a tag on
-# main may do it.
+# Publishes to crates.io, to npm (the WebAssembly package `wsq-codec`, wasm/, with provenance)
+# and to PyPI (the `wsq-codec` Python package, python/), all through Trusted Publishing (OIDC),
+# when a `v*` tag is pushed on `main`, and attaches the C library (capi/) to the GitHub release.
+# A manual run does every check, `cargo publish --dry-run`, `npm publish --dry-run`, builds the
+# wheels and the source distribution, and never publishes: publishing is irreversible and only a
+# tag on main may do it.
 
 on:
   push:
@@ -36,6 +37,12 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # The Python package (python/Cargo.toml, which maturin reads) has the crate's version.
+          py_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' python/Cargo.toml | head -n 1)
+          if [ "$py_version" != "$version" ]; then
+            echo "::error::python/Cargo.toml has version $py_version, Cargo.toml has $version"
+            exit 1
+          fi
           if [ "$REF_TYPE" = tag ]; then
             if [ "$REF_NAME" != "v$version" ]; then
               echo "::error::tag $REF_NAME does not match version $version in Cargo.toml"
@@ -224,3 +231,92 @@ jobs:
           TAG: ${{ github.ref_name }}
           FILE: ${{ steps.package.outputs.file }}
         run: gh release upload "$TAG" "$FILE" --clobber
+
+  # The wheels are abi3: one per platform serves every CPython from 3.9. Linux wheels are built
+  # by maturin-action in a manylinux container.
+  wheels:
+    name: wheel (${{ matrix.name }})
+    needs: [verify, ci]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest, target: x86_64 }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, target: aarch64 }
+          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
+          - { name: macos-x86_64, os: macos-latest, target: x86_64-apple-darwin }
+          - { name: windows-x64, os: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wheels-${{ matrix.name }}
+          path: python/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: source distribution
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sdist
+          path: python/dist/*.tar.gz
+          if-no-files-found: error
+
+  dist-check:
+    name: check the distributions
+    needs: [verify, wheels, sdist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "{wheels-*,sdist}"
+          merge-multiple: true
+          path: dist
+      - run: ls -l dist
+      - run: pipx run twine check --strict dist/*
+
+  # `pypi` is a GitHub environment (the Trusted Publisher on PyPI names it): see
+  # CONTRIBUTING.md for the one-time setup. Only a tag publishes; a manual run stops after
+  # `dist-check`.
+  pypi:
+    name: publish to PyPI
+    if: github.event_name == 'push'
+    needs: [verify, dist-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/wsq-codec/
+    permissions:
+      id-token: write # Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "{wheels-*,sdist}"
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist

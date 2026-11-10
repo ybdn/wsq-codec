@@ -1,5 +1,5 @@
 [workspace]
-members = ["cli", "wasm", "capi"]
+members = ["cli", "wasm", "capi", "python"]
 
 [package]
 name = "wsq-codec"

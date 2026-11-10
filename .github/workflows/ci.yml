@@ -44,6 +44,7 @@ jobs:
               - "cli/**"
               - "wasm/**" # the demo, wasm/demo, included
               - "capi/**"
+              - "python/**"
               - "fuzz/**"
               - "Cargo.*"
               - "deny.toml"
@@ -197,6 +198,50 @@ jobs:
       - run: cargo bench --bench codec --target wasm32-wasip1 -- 1 1 --check
       - run: cargo bench --bench codec --target wasm32-wasip1 -- 0 1 --check
 
+  # Python bindings (python/, issue #49): the wheel is built with maturin on the three operating
+  # systems and the round-trip tests run against the installed wheel, from outside python/ so
+  # that the package under test is the wheel and not the source directory. The wheel is abi3
+  # (one per platform for CPython 3.9 and later), so one interpreter version per system is
+  # enough to test it; Linux also tests the oldest and the newest.
+  python:
+    name: python (${{ matrix.os }}, ${{ matrix.python }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.9" }
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: macos-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.13" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Clippy
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        run: cargo clippy -p wsq-python --all-targets -- -D warnings
+      - name: Install the build and test tools
+        run: python -m pip install maturin numpy pytest
+      - name: Build the wheel
+        run: maturin build --release --manifest-path python/Cargo.toml --out dist
+      - name: Build the source distribution
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        run: maturin sdist --manifest-path python/Cargo.toml --out dist-sdist
+      - name: Install the wheel
+        run: python -m pip install --no-index --no-deps --find-links dist wsq-codec
+      - name: Round-trip tests
+        run: python -m pytest python/tests -v
+
   package:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -307,7 +352,7 @@ jobs:
   # The one status to read: green when every needed job passed or was skipped.
   ci:
     if: ${{ !cancelled() }}
-    needs: [changes, core, bench, wasm, npm, i686, aarch64, wasi, package, semver, capi, capi-header, deny]
+    needs: [changes, core, bench, wasm, npm, i686, aarch64, wasi, python, package, semver, capi, capi-header, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
