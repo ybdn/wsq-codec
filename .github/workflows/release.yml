@@ -56,6 +56,10 @@ jobs:
   ci:
     name: checks
     needs: verify
+    # A called workflow cannot ask for more than its caller grants: ci.yml's `changes` job reads pull requests.
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/ci.yml
 
   publish:
