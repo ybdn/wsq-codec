@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- C API (#50): the `capi` crate (`wsq-capi`, not published on crates.io) builds `libwsq`, a static and a shared library, with the generated header `capi/include/wsq.h`: `wsq_decode`, `wsq_decode_into`, `wsq_read_info`, `wsq_encode`, option structures that carry their size, stable status codes, `wsq_*_free` for everything the library returns, and no panic across the boundary. A C program is built and run against it in CI on Linux, macOS and Windows, and the release workflow attaches the libraries and the header to the GitHub release. The core crate is unchanged. See `capi/README.md`.
+
 ## 1.0.0
 
 The public API is reviewed and frozen (#45); `docs/api-1.0.md` records each decision. From this

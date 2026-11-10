@@ -50,6 +50,12 @@ The demo must keep sending nothing: no external resource, and a Content-Security
 only allows the page's own origin. Its samples are synthetic (`wasm/demo/make_sample.py`);
 never add a real fingerprint there.
 
+The C API (`capi/`, #50) has its own checks: `cargo clippy -p wsq-capi --all-targets -- -D warnings`
+and `cargo test -p wsq-capi` (which compiles and runs `capi/tests/roundtrip.c` with the system C
+compiler). After changing an `extern "C"` item, regenerate the committed header with `cargo
+install cbindgen --version 0.29.4 --locked` and `cbindgen --config capi/cbindgen.toml --crate
+wsq-capi --output capi/include/wsq.h`: CI fails on any difference. See `capi/README.md`.
+
 Optionally, `cargo deny check` (install with `cargo install --locked cargo-deny`) runs the
 supply-chain checks CI runs.
 
