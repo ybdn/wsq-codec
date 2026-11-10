@@ -190,7 +190,7 @@ mod tests {
     /// generated streams and a tiny encoder output for the stream targets,
     /// in `streams/`, and two inputs for `roundtrip`, in `roundtrip/`.
     ///
-    /// `WSQ_SEED_DIR=fuzz/seeds cargo test --lib write_fuzz_seeds -- --ignored`
+    /// `WSQ_SEED_DIR=$PWD/fuzz/seeds cargo test -p wsq-certified --lib write_fuzz_seeds -- --ignored`
     #[test]
     #[ignore = "writes files; run by hand to regenerate fuzz/seeds"]
     fn write_fuzz_seeds() {

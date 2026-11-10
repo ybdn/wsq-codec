@@ -24,7 +24,7 @@ public repository, and [Reproducing](#reproducing) names the NBIS archive with i
 |---|---|
 | Speed and memory against NBIS, intervals, thread scaling (1, 2, 4, 8) | this page |
 | Real fingerprints, locally | [`bench/nbis-compare/README.md`](../bench/nbis-compare/README.md); not executed yet, see below |
-| Byte-for-byte identity with NBIS, streams and pixels | [`tests/nbis.rs`](../tests/nbis.rs) and [`tests/data/README.md`](../tests/data/README.md): ten streams up to 5500x8000, built with `-ffp-contract=off`. Checked again on eight of them here, in both directions |
+| Byte-for-byte identity with NBIS, streams and pixels | [`certified/tests/nbis.rs`](../certified/tests/nbis.rs) and [`certified/tests/data/README.md`](../certified/tests/data/README.md): ten streams up to 5500x8000, built with `-ffp-contract=off`. Checked again on eight of them here, in both directions |
 | Quality: actual bit rate, PSNR, SSIM | [`docs/quality.md`](quality.md), `benches/quality.rs`: not repeated here |
 | Platform independence, FBI certification | [`docs/certification.md`](certification.md): the crate is not certified |
 | Deliberate differences from NBIS | [README](../README.md#differences-from-nbis) |
@@ -36,10 +36,10 @@ per process and the whole distribution, so the two series do not replace each ot
 ## Protocol
 
 **Images.** Four 8-bit images generated with integer arithmetic only, so that they are the same
-on every platform, by the generator of `tests/nbis.rs` (`pattern`, seed = number of pixels):
+on every platform, by the generator of `certified/tests/nbis.rs` (`pattern`, seed = number of pixels):
 `ridges` 800x750 and 1600x1500, `noise` 1600x1500 (white noise, the worst case for compression)
 and `dark_ridges` 5500x8000 (a palm at 1000 ppi). `dark_ridges` is dark (mean 75) because NBIS
-stops on a bright image of that size: it sums the pixels in 32 bits (`tests/data/README.md`).
+stops on a bright image of that size: it sums the pixels in 32 bits (`certified/tests/data/README.md`).
 These are synthetic patterns, not fingerprints. `wsq-nbis gen` writes them as raw files.
 
 **Parameters.** Requested bit rates 0.75 and 2.25 bits per pixel, 500 ppi declared, no comment
@@ -299,7 +299,7 @@ benchmark included), with a load average of 4.8 at the end. No core was reserved
 All 96 checks are identical ([`identity.txt`](../bench/nbis-compare/results/2026-11-04/identity.txt)):
 streams equal to NBIS's byte for byte and pixels equal in both directions, for the 8 pairs of
 image and rate (streams from 56,089 to 12,518,245 bytes), for this checkout and the release, with
-1 and 4 threads. The lengths are those of `tests/data/README.md`. It is a subset of that page's ten
+1 and 4 threads. The lengths are those of `certified/tests/data/README.md`. It is a subset of that page's ten
 streams (`rings` is not used) and says nothing more than it does, only that the result repeats here,
 on this machine.
 
@@ -409,7 +409,7 @@ program using the crate was not measured.
 - **Rates and formats.** Two rates (0.75 and 2.25), 8 bits, 500 ppi declared. The deliberate
   differences from NBIS (images under 81 pixels, nearly flat images, the 32-bit sum overflowing on a
   bright 5500x8000 image) are not in the corpus; the README describes them.
-- **Identity.** Shown for the 8 streams and reconstructions above and, in `tests/nbis.rs`, for the
+- **Identity.** Shown for the 8 streams and reconstructions above and, in `certified/tests/nbis.rs`, for the
   cases it lists; not proved for every image. It is not a certification: see
   [`docs/certification.md`](certification.md).
 

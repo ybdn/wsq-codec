@@ -12,6 +12,6 @@ for file in fuzz/fuzz_targets/*.rs; do
     if [ "$name" = roundtrip ]; then
         zip -jq "$OUT/${name}_seed_corpus.zip" fuzz/seeds/roundtrip/*
     else
-        zip -jq "$OUT/${name}_seed_corpus.zip" fuzz/seeds/streams/* tests/data/*.wsq
+        zip -jq "$OUT/${name}_seed_corpus.zip" fuzz/seeds/streams/* certified/tests/data/*.wsq
     fi
 done

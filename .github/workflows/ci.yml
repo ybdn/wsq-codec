@@ -38,6 +38,7 @@ jobs:
           filters: |
             rust:
               - "src/**"
+              - "certified/**"
               - "benches/**"
               - "tests/**"
               - "examples/**"
@@ -57,7 +58,7 @@ jobs:
     with:
       msrv: "1.85"
       feature-sets: '["", "--features image"]'
-      extra-test-packages: -p wsq-cli
+      extra-test-packages: -p wsq-certified -p wsq-cli
     secrets: inherit
 
   bench:
@@ -141,7 +142,7 @@ jobs:
           targets: i686-unknown-linux-gnu
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
-      - run: cargo test --release --target i686-unknown-linux-gnu --lib --tests
+      - run: cargo test --release --target i686-unknown-linux-gnu --lib --tests -p wsq-codec -p wsq-certified
 
   # Determinism on a second architecture, executed: the tests (NBIS fixtures
   # included) and the benchmark's stream hashes on a hosted AArch64 runner.
@@ -161,14 +162,14 @@ jobs:
         run: |
           uname -m
           rustc -vV
-      - run: cargo test --release --lib --tests
+      - run: cargo test --release --lib --tests -p wsq-codec -p wsq-certified
       - run: cargo bench --bench codec -- 1 1 --check
       - run: cargo bench --bench codec -- 0 1 --check
 
   # wasm32 executed, not only built: the tests and the benchmark's stream
   # hashes under wasmtime. WASI has no threads, so `src/par.rs` runs every job
-  # on the calling thread; the output is the same. `tests/inspect.rs` reads
-  # `tests/data` at run time, hence the `--dir` mapping of the checkout to the
+  # on the calling thread; the output is the same. `certified/tests/inspect.rs` reads
+  # `certified/tests/data` at run time, hence the `--dir` mapping of the checkout to the
   # same path inside the guest.
   wasi:
     name: test (wasm32-wasip1)
@@ -194,7 +195,7 @@ jobs:
           uname -m
           rustc -vV
           wasmtime --version
-      - run: cargo test --release --target wasm32-wasip1 --lib --tests
+      - run: cargo test --release --target wasm32-wasip1 --lib --tests -p wsq-codec -p wsq-certified
       - run: cargo bench --bench codec --target wasm32-wasip1 -- 1 1 --check
       - run: cargo bench --bench codec --target wasm32-wasip1 -- 0 1 --check
 
@@ -242,6 +243,95 @@ jobs:
       - name: Round-trip tests
         run: python -m pytest python/tests -v
 
+  # The certified crate on the compiler the certificate names (certified/rust-toolchain.toml):
+  # built, linted and tested with it, and the benchmark's stream hashes through wsq-codec. rustup
+  # reads the file from the working directory, hence `working-directory: certified` on every
+  # step; the other jobs use the stable and MSRV toolchains and are not affected, because the
+  # file is not at the repository root. The step that records the compiler fails if rustup did
+  # not apply the pin.
+  certified:
+    name: certified (pinned toolchain)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: certified
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - name: Record the compiler
+        run: |
+          rustc -vV
+          cargo -V
+          pinned=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          actual=$(rustc --version | cut -d' ' -f2)
+          if [ "$pinned" != "$actual" ]; then
+            echo "::error::rustc is $actual, rust-toolchain.toml pins $pinned"
+            exit 1
+          fi
+      - name: Check the exact-version pins of wsq-certified
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          for manifest in ../Cargo.toml ../cli/Cargo.toml; do
+            if ! grep -q "^wsq-certified = { version = \"=$version\"" "$manifest"; then
+              echo "::error::$manifest does not depend on wsq-certified =$version"
+              exit 1
+            fi
+          done
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release -p wsq-cli
+      - run: cargo test --release
+      - run: cargo test --release --test nbis -- --ignored
+      - run: cargo test --release -p wsq-cli
+      - run: cargo bench -p wsq-codec --bench codec -- 1 1 --check
+      - run: cargo bench -p wsq-codec --bench codec -- 0 1 --check
+
+  # Any change to certified/ is a new version to certify (certified/README.md): a pull request
+  # that changes its code, tests or manifest must raise `version` in certified/Cargo.toml.
+  # Markdown files are exempt (they are not built). Pull requests only.
+  certified-version:
+    name: certified version bump
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the base commit must be there
+      - name: Compare with the base branch
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE_SHA" HEAD -- certified ':!certified/*.md')
+          if [ -z "$changed" ]; then
+            echo "certified/ is unchanged (Markdown files aside)"
+            exit 0
+          fi
+          echo "Changed under certified/:"
+          echo "$changed"
+          version_in() {
+            git show "$1:certified/Cargo.toml" 2>/dev/null | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1
+          }
+          base=$(version_in "$BASE_SHA")
+          head=$(version_in HEAD)
+          if [ -z "$base" ]; then
+            echo "certified/ is new in this pull request (version $head)"
+            exit 0
+          fi
+          newest=$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -n 1)
+          if [ "$head" = "$base" ] || [ "$newest" != "$head" ]; then
+            echo "::error::certified/ changed but its version is $head (base: $base). Any change to wsq-certified is a new version to certify: raise version in certified/Cargo.toml, update the pins in Cargo.toml and cli/Cargo.toml, and add a section to certified/CHANGELOG.md."
+            exit 1
+          fi
+          if ! grep -qx "## $head" certified/CHANGELOG.md; then
+            echo "::error::certified/CHANGELOG.md has no '## $head' section"
+            exit 1
+          fi
+          echo "certified/ changed and its version went from $base to $head"
+
   package:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -254,7 +344,10 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy -p wsq-cli --all-targets -- -D warnings
-      - run: cargo package
+      # Both crates in one command: wsq-codec depends on wsq-certified at an exact version, and
+      # cargo (1.90 and later) verifies it against the package just made, so that this passes
+      # before wsq-certified is on crates.io.
+      - run: cargo package -p wsq-certified -p wsq-codec
 
   # The public API is frozen from 1.0 (docs/api-1.0.md). The baseline is the latest release on
   # crates.io, the default: cargo-semver-checks takes the kind of release from the difference
@@ -280,6 +373,18 @@ jobs:
       - name: Install cargo-semver-checks
         run: command -v cargo-semver-checks || cargo install cargo-semver-checks --version 0.51.0 --locked
       - run: cargo semver-checks check-release -p wsq-codec --all-features
+      # cargo-semver-checks cannot see through a re-export from another crate: the items that
+      # wsq-codec re-exports from wsq-certified (the decoder, the errors, `inspect`, ...) are
+      # only checked here, on the crate that defines them. Skipped while wsq-certified is not on
+      # crates.io (no baseline); once it is, a breaking change to it needs a major version, and
+      # as it is certified, a new certification.
+      - name: cargo-semver-checks for wsq-certified
+        run: |
+          if cargo search wsq-certified --limit 1 | grep -q '^wsq-certified = '; then
+            cargo semver-checks check-release -p wsq-certified
+          else
+            echo "wsq-certified is not on crates.io yet: nothing to compare with"
+          fi
 
   # The C API (#50): the library, its tests and a C program that encodes and decodes through
   # it, on the three desktop operating systems. `cargo test` compiles `capi/tests/roundtrip.c`
@@ -352,7 +457,7 @@ jobs:
   # The one status to read: green when every needed job passed or was skipped.
   ci:
     if: ${{ !cancelled() }}
-    needs: [changes, core, bench, wasm, npm, i686, aarch64, wasi, python, package, semver, capi, capi-header, deny]
+    needs: [changes, core, bench, wasm, npm, i686, aarch64, wasi, python, certified, certified-version, package, semver, capi, capi-header, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

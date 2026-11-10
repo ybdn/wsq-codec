@@ -19,7 +19,7 @@
 //! Nothing here is an estimate: a requirement the text does not give is not
 //! checked.
 
-use wsq_codec::inspect::Quantized;
+use wsq_certified::inspect::Quantized;
 
 /// The limits of Annex AA, in parts per million, so that every comparison on
 /// counts is exact integer arithmetic.
@@ -408,10 +408,11 @@ mod tests {
         let pixels: Vec<u8> = (0..120 * 100)
             .map(|i| ((i % 120) * 3 + (i / 120) * 2 + (i * i) % 7) as u8)
             .collect();
-        let options = wsq_codec::EncodeOptions::default().with_bitrate(bitrate);
-        let data = wsq_codec::encode(&pixels, 120, 100, &options).unwrap();
-        let q = wsq_codec::inspect::read_quantized(&data, &wsq_codec::DecodeOptions::default())
-            .unwrap();
+        let options = wsq_certified::EncodeOptions::default().with_bitrate(bitrate);
+        let data = wsq_certified::encode(&pixels, 120, 100, &options).unwrap();
+        let q =
+            wsq_certified::inspect::read_quantized(&data, &wsq_certified::DecodeOptions::default())
+                .unwrap();
         (data, q)
     }
 

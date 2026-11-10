@@ -58,4 +58,4 @@ jobs:
           uname -m
           rustc -vV
           cross --version
-      - run: cross test --release --target s390x-unknown-linux-gnu --lib --tests
+      - run: cross test --release --target s390x-unknown-linux-gnu --lib --tests -p wsq-codec -p wsq-certified

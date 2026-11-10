@@ -170,3 +170,14 @@ above. **Decision: keep, document.**
 - `From<ReadError> for io::Error` and `From<WriteError> for io::Error`.
 - `Display` / `FromStr` for `Profile` (the CLI parses it itself).
 - A streaming decoder or encoder (the wavelet transform needs the whole image).
+
+## The certified crate (#46)
+
+After this review the decoder, the conformant encoder and `inspect` moved to the `wsq-certified`
+crate, which `wsq-codec` re-exports at an exact version. The public API of `wsq-codec` is the one
+reviewed above: the same items at the same paths. `Image`, `Decoder`, `EncodeOptions` and
+`Encoder` are defined in `wsq-codec` (over the certified types, because of the `image` feature
+and the `Profile`); the rest is re-exported. The design is in `docs/certification.md`. Two
+consequences for this review: `cargo-semver-checks` cannot see through the re-exports (it is also
+run on `wsq-certified`), and any change to the API items that `wsq-codec` re-exports is a change
+to the certified crate, hence a new version to certify.

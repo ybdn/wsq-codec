@@ -12,5 +12,8 @@ wsq decode finger.wsq finger.pgm
 wsq info finger.wsq
 ```
 
+`wsq cert` runs the `wsq-certified` crate, the part of `wsq-codec` a certificate would cover, and
+`submission.txt` names its version.
+
 See the [main README](https://github.com/ybdn-ei/wsq-codec#readme) and `docs/certification.md`.
 Licensed under MIT.

@@ -8,6 +8,7 @@ on:
     branches: [develop, main]
     paths:
       - "src/**"
+      - "certified/**"
       - "fuzz/**"
       - "Cargo.*"
 

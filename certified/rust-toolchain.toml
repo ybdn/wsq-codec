@@ -1,0 +1,12 @@
+# The compiler of the certified build. The FBI certificate names one compiler
+# version, so this file pins it exactly: raise it only together with a new
+# certification (certified/README.md, docs/certification.md).
+#
+# rustup reads this file for every command run in this directory or below, so
+# build and test the certified crate from `certified/`. It is not at the
+# repository root on purpose: there it would also override the toolchain of
+# the other CI jobs, the MSRV one included.
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

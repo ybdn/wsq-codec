@@ -1,6 +1,6 @@
 """Round-trip and conformance tests of the Python bindings.
 
-The fixtures in ``tests/data`` were written by NIST's NBIS 5.0.0 from synthetic images; the
+The fixtures in ``certified/tests/data`` were written by NIST's NBIS 5.0.0 from synthetic images; the
 hashes below are the ones ``tests/nbis.rs`` checks (the FNV-1a of the pixels NBIS decodes).
 """
 
@@ -12,7 +12,7 @@ import pytest
 
 import wsq_codec
 
-DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
+DATA = Path(__file__).resolve().parents[2] / "certified" / "tests" / "data"
 
 NISTCOM = b"NIST_COM 4\nSEX m\nPPI 1000\nFING_CLASS W"
 PLAIN = b"Scanned by the test suite"
