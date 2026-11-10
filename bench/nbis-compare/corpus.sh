@@ -74,11 +74,13 @@ for f in "${files[@]}"; do
     if ! "$nbis_bin" e "$scratch/in.raw" "$w" "$h" "$rate" 500 "$scratch/ref.wsq" > /dev/null 2>&1; then
       skipped=$((skipped + 1)); continue; fi
   else
-    # An unreadable source is skipped like any unusable file, without its name; a failure to
-    # write the scratch copy is reported (it names only the scratch directory).
+    # An unreadable source is skipped like any unusable file, without its name. Once the source
+    # is known to be readable, any failure of the copy (disk full, quota, file size limit) stops
+    # the run, with a message that names no corpus file.
+    if ! head -c 1 -- "$f" > /dev/null 2>&1; then skipped=$((skipped + 1)); continue; fi
     if ! cat -- "$f" 2> /dev/null > "$scratch/cur.wsq"; then
-      [ -w "$scratch/cur.wsq" ] || { echo "cannot write to the scratch directory" >&2; exit 1; }
-      skipped=$((skipped + 1)); continue
+      echo "cannot copy a corpus file to the scratch directory (disk full or not writable?)" >&2
+      exit 1
     fi
     w=0; h=0
     cp "$scratch/cur.wsq" "$scratch/ref.wsq"
