@@ -420,3 +420,129 @@ fn hit_rate(
             .unwrap_or(EncodeError::BitrateTooLow(stream.bitrate))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{decode, read_info};
+
+    /// The `checker` test image of tests/nbis.rs, seeded by its size.
+    fn checker(w: usize, h: usize) -> Vec<u8> {
+        let mut state = (w * h) as u32;
+        let mut out = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let base = if (x / 7 + y / 5) % 2 == 1 { 200 } else { 40 };
+                out.push((base + (state >> 24 & 7)) as u8);
+            }
+        }
+        out
+    }
+
+    fn enc(w: usize, h: usize, options: &EncodeOptions) -> Result<Vec<u8>, EncodeError> {
+        let mut scratch = wavelet::Scratch::default();
+        encode(&checker(w, h), w, h, options, Rate::Allocated, &mut scratch)
+    }
+
+    #[test]
+    fn default_options_give_the_reference_stream() {
+        let wsq = enc(101, 97, &EncodeOptions::default()).unwrap();
+        assert!(wsq == include_bytes!("../tests/data/checker_101x97.wsq"));
+    }
+
+    #[test]
+    fn stream_starts_with_the_header_and_ends_with_the_end_of_image() {
+        let wsq = enc(MIN_DIMENSION, MIN_DIMENSION, &EncodeOptions::default()).unwrap();
+        assert_eq!(wsq[..2], SOI.to_be_bytes());
+        assert_eq!(wsq[wsq.len() - 2..], EOI.to_be_bytes());
+        let info = read_info(&wsq).unwrap();
+        assert_eq!((info.width, info.height), (MIN_DIMENSION, MIN_DIMENSION));
+        let image = decode(&wsq).unwrap();
+        assert_eq!(image.pixels.len(), MIN_DIMENSION * MIN_DIMENSION);
+    }
+
+    #[test]
+    fn ppi_software_and_comments_reach_the_stream() {
+        let options = EncodeOptions::default()
+            .with_ppi(Some(1000))
+            .with_software(0x1234)
+            .with_comment(b"hello".to_vec());
+        let wsq = enc(101, 97, &options).unwrap();
+        let info = read_info(&wsq).unwrap();
+        assert_eq!(info.ppi, Some(1000));
+        assert_eq!(info.software, 0x1234);
+        assert!(info.comments.iter().any(|c| c == b"hello"));
+        assert_eq!(
+            read_info(&enc(101, 97, &EncodeOptions::default()).unwrap())
+                .unwrap()
+                .ppi,
+            None
+        );
+    }
+
+    #[test]
+    fn hit_rate_never_carries_the_software_number() {
+        let (w, h) = (101, 97);
+        let options = EncodeOptions::default().with_software(0x1234);
+        let mut scratch = wavelet::Scratch::default();
+        let wsq = encode(&checker(w, h), w, h, &options, Rate::Hit, &mut scratch).unwrap();
+        assert_eq!(read_info(&wsq).unwrap().software, 0);
+    }
+
+    #[test]
+    fn invalid_arguments_are_refused() {
+        let options = EncodeOptions::default();
+        let err = |w, h, pixels: usize, o: &EncodeOptions| {
+            let mut scratch = wavelet::Scratch::default();
+            encode(&vec![0; pixels], w, h, o, Rate::Allocated, &mut scratch).unwrap_err()
+        };
+        let m = MIN_DIMENSION;
+        assert_eq!(
+            err(m - 1, m, (m - 1) * m, &options),
+            EncodeError::InvalidDimensions {
+                width: m - 1,
+                height: m
+            }
+        );
+        assert_eq!(
+            err(m, m - 1, m * (m - 1), &options),
+            EncodeError::InvalidDimensions {
+                width: m,
+                height: m - 1
+            }
+        );
+        assert_eq!(
+            err(m, m, m * m - 1, &options),
+            EncodeError::PixelCountMismatch {
+                expected: m * m,
+                actual: m * m - 1
+            }
+        );
+        assert_eq!(
+            err(m, m, m * m, &options.clone().with_ppi(Some(0))),
+            EncodeError::InvalidPpi
+        );
+        for rate in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let got = err(m, m, m * m, &options.clone().with_bitrate(rate));
+            assert!(matches!(got, EncodeError::InvalidBitrate(_)), "{rate}");
+        }
+    }
+
+    #[test]
+    fn flat_image_encodes_and_decodes_flat() {
+        let (w, h) = (MIN_DIMENSION, MIN_DIMENSION);
+        let mut scratch = wavelet::Scratch::default();
+        let flat = vec![77u8; w * h];
+        let options = EncodeOptions::default();
+        let wsq = encode(&flat, w, h, &options, Rate::Allocated, &mut scratch).unwrap();
+        assert_eq!(decode(&wsq).unwrap().pixels, flat);
+    }
+
+    #[test]
+    fn threads_do_not_change_the_stream() {
+        let one = enc(101, 97, &EncodeOptions::default()).unwrap();
+        let four = enc(101, 97, &EncodeOptions::default().with_threads(4)).unwrap();
+        assert!(one == four);
+    }
+}

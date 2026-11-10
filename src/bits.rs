@@ -219,6 +219,140 @@ impl<'a> BitWriter<'a> {
 mod tests {
     use super::*;
 
+    fn written(f: impl FnOnce(&mut BitWriter)) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut w = BitWriter::new(&mut out);
+        f(&mut w);
+        w.flush();
+        out
+    }
+
+    #[test]
+    fn byte_reader_is_big_endian_and_reports_the_end() {
+        let mut r = ByteReader::new(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(r.u8().unwrap(), 1);
+        assert_eq!(r.u16().unwrap(), 0x0203);
+        assert_eq!(r.u32().unwrap(), 0x0405_0607);
+        assert_eq!(r.rest(), [8, 9]);
+        assert_eq!(r.bytes(2).unwrap(), [8, 9]);
+        assert_eq!(r.u8(), Err(DecodeError::UnexpectedEof));
+        assert_eq!(r.rest(), []);
+    }
+
+    #[test]
+    fn byte_reader_refuses_to_read_past_the_end() {
+        let mut r = ByteReader::new(&[1, 2, 3]);
+        assert_eq!(r.u32(), Err(DecodeError::UnexpectedEof));
+        assert_eq!(r.bytes(4), Err(DecodeError::UnexpectedEof));
+        assert_eq!(r.bytes(usize::MAX), Err(DecodeError::UnexpectedEof));
+        let mut r = ByteReader::new(&[1, 2, 3]);
+        assert_eq!(r.bytes(3).unwrap(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn writer_pads_with_ones_and_stuffs_every_ff() {
+        assert_eq!(written(|w| w.put(0, 1)), [0b0111_1111]);
+        assert_eq!(written(|_| {}), []);
+        assert_eq!(written(|w| w.put(0xFFFF, 16)), [0xFF, 0, 0xFF, 0]);
+        // Only the low `size` bits count.
+        assert_eq!(written(|w| w.put(0xFFF5, 4)), [0b0101_1111]);
+        // A byte made of the end of one code and the start of the next.
+        assert_eq!(
+            written(|w| {
+                w.put(0b1111, 4);
+                w.put(0b1111, 4);
+            }),
+            [0xFF, 0]
+        );
+    }
+
+    #[test]
+    fn codes_of_any_size_round_trip() {
+        let codes: Vec<(u16, u8)> = (1..=16u8)
+            .cycle()
+            .take(100)
+            .enumerate()
+            .map(|(i, n)| ((i as u16).wrapping_mul(40503) & (u16::MAX >> (16 - n)), n))
+            .collect();
+        let out = written(|w| codes.iter().for_each(|&(c, n)| w.put(c, n)));
+        let mut bytes = ByteReader::new(&out);
+        let mut r = bytes.bits();
+        for &(c, n) in &codes {
+            assert_eq!(r.bits(n).unwrap(), c);
+        }
+    }
+
+    #[test]
+    fn reading_zero_bits_takes_nothing() {
+        let mut bytes = ByteReader::new(&[]);
+        assert_eq!(bytes.bits().bits(0).unwrap(), 0);
+    }
+
+    #[test]
+    fn bit_by_bit_matches_whole_values() {
+        let mut bytes = ByteReader::new(&[0b1010_0000, 0xFF, 0x00, 0x01]);
+        let mut r = bytes.bits();
+        let mut got = Vec::new();
+        for _ in 0..8 {
+            let Bit::Bit(b) = r.bit().unwrap() else {
+                panic!("marker")
+            };
+            got.push(b);
+        }
+        assert_eq!(got, [1, 0, 1, 0, 0, 0, 0, 0]);
+        assert_eq!(r.bits(8).unwrap(), 0xFF);
+        assert_eq!(r.bits(8).unwrap(), 0x01);
+    }
+
+    #[test]
+    fn marker_ends_the_data_on_a_byte_boundary() {
+        let mut bytes = ByteReader::new(&[0xAB, 0xFF, 0xD9, 0x12]);
+        let mut r = bytes.bits();
+        assert_eq!(r.bits(8).unwrap(), 0xAB);
+        // The marker is reported again and again, never as data.
+        for _ in 0..3 {
+            assert!(matches!(r.bit().unwrap(), Bit::Marker(0xFFD9)));
+        }
+        assert_eq!(r.peek(1), None);
+        // The byte reader sits just past the marker.
+        assert_eq!(bytes.rest(), [0x12]);
+    }
+
+    #[test]
+    fn marker_inside_a_value_is_corrupt_data() {
+        let mut bytes = ByteReader::new(&[0xAB, 0xFF, 0xD9]);
+        let mut r = bytes.bits();
+        assert_eq!(
+            r.bits(12),
+            Err(DecodeError::CorruptData("marker inside a value"))
+        );
+    }
+
+    #[test]
+    fn truncated_data_is_an_unexpected_end() {
+        let mut bytes = ByteReader::new(&[0xAB]);
+        let mut r = bytes.bits();
+        assert_eq!(r.bits(9), Err(DecodeError::UnexpectedEof));
+        let mut bytes = ByteReader::new(&[]);
+        assert_eq!(bytes.bits().bit().err(), Some(DecodeError::UnexpectedEof));
+        // A lone 0xFF has no second byte to tell stuffing from a marker.
+        let mut bytes = ByteReader::new(&[0xFF]);
+        assert_eq!(bytes.bits().bit().err(), Some(DecodeError::UnexpectedEof));
+        let mut bytes = ByteReader::new(&[0xFF]);
+        assert_eq!(bytes.bits().bits(8), Err(DecodeError::UnexpectedEof));
+    }
+
+    #[test]
+    fn peek_leaves_the_bits_to_be_consumed() {
+        let mut bytes = ByteReader::new(&[0b1100_1010, 0x0F]);
+        let mut r = bytes.bits();
+        assert_eq!(r.peek(4), Some(0b1100));
+        assert_eq!(r.peek(12), Some(0b1100_1010_0000));
+        r.consume(4);
+        assert_eq!(r.peek(4), Some(0b1010));
+        assert_eq!(r.peek(13), None);
+    }
+
     #[test]
     fn stuffing_round_trips() {
         let mut out = Vec::new();
