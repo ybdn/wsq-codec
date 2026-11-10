@@ -105,3 +105,56 @@ fn exit_codes() {
     assert!(!target.exists());
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn encode_profile_optimized_meets_the_size() {
+    let dir = scratch("profile");
+    let (src, conformant, optimized) = (dir.join("a.pgm"), dir.join("c.wsq"), dir.join("o.wsq"));
+    fs::write(&src, pgm(256, 256)).unwrap();
+    let encode = |args: &[&str], dst: &PathBuf| {
+        let mut full = vec!["encode"];
+        full.extend_from_slice(args);
+        full.extend([src.to_str().unwrap(), dst.to_str().unwrap(), "1.5"]);
+        wsq(&full)
+    };
+    assert!(encode(&[], &conformant).status.success());
+    assert!(
+        encode(&["--profile", "conformant"], &conformant)
+            .status
+            .success()
+    );
+    let out = encode(&["--profile=optimized"], &optimized);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let target = 1.5 * 256.0 * 256.0 / 8.0;
+    let len = fs::metadata(&optimized).unwrap().len() as f64;
+    assert!(
+        len <= target && len >= target * 0.995,
+        "{len} against {target}"
+    );
+    assert_ne!(
+        fs::read(&conformant).unwrap(),
+        fs::read(&optimized).unwrap()
+    );
+    let back = dir.join("b.pgm");
+    let out = wsq(&[
+        "decode",
+        optimized.to_str().unwrap(),
+        back.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+}
+
+#[test]
+fn encode_rejects_an_unknown_profile() {
+    for args in [&["--profile", "fast"][..], &["--profile"], &["--profile=x"]] {
+        let mut full = vec!["encode"];
+        full.extend_from_slice(args);
+        full.extend(["in.pgm", "out.wsq"]);
+        let out = wsq(&full);
+        assert_eq!(out.status.code(), Some(64), "{args:?}");
+    }
+}

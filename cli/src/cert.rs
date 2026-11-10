@@ -32,7 +32,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use wsq_codec::inspect::{Quantized, read_quantized};
-use wsq_codec::{DecodeOptions, EncodeOptions};
+use wsq_codec::{DecodeOptions, EncodeOptions, Profile};
 
 use crate::accuracy::{self, Thresholds};
 use crate::corpus::read_pgm;
@@ -151,6 +151,7 @@ fn encode(
         let rel = path.strip_prefix(input)?.with_extension("wsq");
         for (rate, name) in RATES {
             let options = EncodeOptions::default()
+                .with_profile(Profile::Conformant)
                 .with_bitrate(rate)
                 .with_ppi(ppi)
                 .with_software(software);

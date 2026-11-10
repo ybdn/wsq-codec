@@ -162,6 +162,74 @@ impl DecodeOptions {
     }
 }
 
+/// Which encoder writes the stream: the one aligned with the reference
+/// implementation, or one that departs from it to meet the requested size.
+///
+/// Both write streams that any WSQ decoder reads. They differ in what they
+/// promise: see [`Conformant`](Self::Conformant) and
+/// [`Optimized`](Self::Optimized). The profile is an
+/// [`EncodeOptions`] field, so [`encode`], [`Encoder`] and [`encode_to`]
+/// all honour it.
+///
+/// ```
+/// use wsq_codec::{EncodeOptions, Profile};
+///
+/// let options = EncodeOptions::default()
+///     .with_profile(Profile::Optimized)
+///     .with_bitrate(0.75);
+/// # let _ = options;
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Profile {
+    /// The encoder aligned with the NIST reference implementation (NBIS):
+    /// the bit allocation of the specification, byte-identical output for
+    /// the same image and bit rate (see the crate documentation for the
+    /// exceptions), the same on every platform. This is the default, and
+    /// the only profile meant for FBI certification: only it may write an
+    /// implementation number in [`EncodeOptions::software`].
+    ///
+    /// The actual size lands near the requested [`bitrate`] (the
+    /// reference's allocation is approximate), not on it.
+    ///
+    /// [`bitrate`]: EncodeOptions::bitrate
+    #[default]
+    Conformant,
+    /// An encoder free to depart from the reference, never certified: it
+    /// meets the requested size.
+    ///
+    /// The stream has the conformant layout and tables; only the quantizer
+    /// bin widths differ: those of the specification's bit allocation, all
+    /// multiplied by one factor that a search chooses on the length of the
+    /// whole stream (headers, tables, comments and entropy-coded data). The
+    /// search stops on the first stream at most
+    /// [`OPTIMIZED_TOLERANCE`](Self::OPTIMIZED_TOLERANCE) below the size
+    /// [`bitrate`](EncodeOptions::bitrate) asks for (`bitrate * width *
+    /// height / 8` bytes) and never returns a longer stream while one fits;
+    /// where no stream can come that close (a target above what the image
+    /// can spend, or below what the quantization table allows), it returns
+    /// the nearest one it wrote. The output depends neither on the platform
+    /// nor on [`threads`](EncodeOptions::threads).
+    ///
+    /// The target is the one setting: a size in bytes is `bitrate` times
+    /// the pixel count over 8, so a second knob would say nothing more.
+    ///
+    /// Any WSQ decoder reads the result, but it is not what the reference
+    /// writes for the same rate, so it is never conformant: encoding with a
+    /// non-zero [`software`](EncodeOptions::software) is refused with
+    /// [`EncodeError::SoftwareRequiresConformant`]. The NISTCOM comment
+    /// records the requested rate. It costs one quantization and one
+    /// Huffman coding per stream tried, and keeps the transformed image (4
+    /// bytes per pixel) until the end.
+    Optimized,
+}
+
+impl Profile {
+    /// Share of the requested size that [`Optimized`](Self::Optimized) may
+    /// fall short by when it stops: 0.005, half a percent.
+    pub const OPTIMIZED_TOLERANCE: f64 = encode::HIT_TOLERANCE;
+}
+
 /// Encoder settings.
 ///
 /// ```
@@ -190,11 +258,19 @@ pub struct EncodeOptions {
     pub comments: Vec<Vec<u8>>,
     /// Implementation number the FBI assigned to the encoder, written in
     /// the frame header. 0, the default, means unassigned.
+    ///
+    /// Only the [`Conformant`](Profile::Conformant) profile may write a
+    /// non-zero number: with [`Optimized`](Profile::Optimized) it is
+    /// refused ([`EncodeError::SoftwareRequiresConformant`]).
     pub software: u16,
     /// Number of threads to split the work over: 1, the default, keeps it
     /// all on the calling thread, and 0 uses one thread per core. The
     /// output does not depend on it.
     pub threads: usize,
+    /// Which encoder to use: [`Profile::Conformant`], the default, or
+    /// [`Profile::Optimized`], which meets the size [`bitrate`](Self::bitrate)
+    /// asks for.
+    pub profile: Profile,
 }
 
 impl Default for EncodeOptions {
@@ -205,6 +281,7 @@ impl Default for EncodeOptions {
             comments: Vec::new(),
             software: 0,
             threads: 1,
+            profile: Profile::Conformant,
         }
     }
 }
@@ -242,6 +319,13 @@ impl EncodeOptions {
     #[must_use]
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.threads = threads;
+        self
+    }
+
+    /// Sets [`profile`](Self::profile).
+    #[must_use]
+    pub fn with_profile(mut self, profile: Profile) -> Self {
+        self.profile = profile;
         self
     }
 }
@@ -390,6 +474,11 @@ pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
 /// Both dimensions must be between 81 and 65535; smaller images leave
 /// some subbands too small to quantize.
 ///
+/// The [`profile`](EncodeOptions::profile) chooses the encoder:
+/// [`Conformant`](Profile::Conformant) by default, which reproduces the
+/// reference, or [`Optimized`](Profile::Optimized), which meets the
+/// requested size.
+///
 /// # Errors
 ///
 /// Returns an [`EncodeError`]:
@@ -398,7 +487,9 @@ pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
 /// `width * height` bytes, [`InvalidBitrate`](EncodeError::InvalidBitrate) or
 /// [`BitrateTooLow`](EncodeError::BitrateTooLow) for an unusable bit rate,
 /// [`CommentTooLong`](EncodeError::CommentTooLong) for a comment that does not fit in one
-/// segment, and [`InvalidPpi`](EncodeError::InvalidPpi) if the resolution is zero.
+/// segment, [`InvalidPpi`](EncodeError::InvalidPpi) if the resolution is zero, and
+/// [`SoftwareRequiresConformant`](EncodeError::SoftwareRequiresConformant) for an implementation
+/// number with the [`Optimized`](Profile::Optimized) profile.
 pub fn encode(
     pixels: &[u8],
     width: usize,
@@ -410,7 +501,6 @@ pub fn encode(
         width,
         height,
         options,
-        encode::Rate::Allocated,
         &mut wavelet::Scratch::default(),
     )
 }
@@ -456,14 +546,7 @@ impl Encoder {
         width: usize,
         height: usize,
     ) -> Result<Vec<u8>, EncodeError> {
-        encode::encode(
-            pixels,
-            width,
-            height,
-            &self.options,
-            encode::Rate::Allocated,
-            &mut self.scratch,
-        )
+        encode::encode(pixels, width, height, &self.options, &mut self.scratch)
     }
 }
 
@@ -485,57 +568,35 @@ pub fn encode_to<W: std::io::Write>(
     Ok(())
 }
 
-/// Experimental encoding outside the reference implementation, for
-/// measurement only.
+/// Experimental entry points outside the reference implementation, kept
+/// for the benchmarks.
 ///
 /// Nothing here is covered by semantic versioning: it may change or go in
-/// any release. It is a prototype for issue #42, ahead of the encoding
-/// profiles of issue #44.
+/// any release. Use [`Profile::Optimized`] instead.
 #[doc(hidden)]
 pub mod experimental {
-    use crate::{EncodeError, EncodeOptions, encode, wavelet};
+    use crate::{EncodeError, EncodeOptions, Profile, encode};
 
-    /// Share of the requested size [`encode_at_rate`] may fall short by
-    /// when it stops: 0.005, half a percent.
-    pub const RATE_TOLERANCE: f64 = encode::HIT_TOLERANCE;
+    /// Same as [`Profile::OPTIMIZED_TOLERANCE`].
+    pub const RATE_TOLERANCE: f64 = Profile::OPTIMIZED_TOLERANCE;
 
-    /// Encodes an image so that the whole stream comes as close as it can
-    /// to `options.bitrate` bits per pixel without exceeding it.
-    ///
-    /// The stream has the conformant encoder's layout and tables; only the
-    /// quantizer bin widths differ: those of the specification's bit
-    /// allocation, all multiplied by one factor that a search chooses on
-    /// the length of the whole stream (headers, tables, comments and
-    /// entropy-coded data). The search stops on the first stream within
-    /// [`RATE_TOLERANCE`] below the target, or after 40 streams, and keeps
-    /// the longest stream that fits; when no factor fits, the shortest
-    /// stream it wrote. The output depends neither on the platform nor on
-    /// `options.threads`.
-    ///
-    /// Any WSQ decoder reads the result, but it is not what the reference
-    /// implementation writes for the same rate, so it is never conformant:
-    /// the frame header always carries implementation number 0, whatever
-    /// `options.software` says. The NISTCOM comment records the requested
-    /// rate. It costs one quantization and one Huffman coding per stream
-    /// tried, and keeps the transformed image (4 bytes per pixel) until the
-    /// end.
+    /// Encodes an image with [`Profile::Optimized`], whatever
+    /// `options.profile` says, and with implementation number 0 whatever
+    /// `options.software` says (the prototype of #42 ignored it).
     ///
     /// # Errors
     ///
-    /// Returns the [`EncodeError`] that [`encode`](crate::encode) gives.
+    /// Returns the [`EncodeError`] that [`encode`] gives.
     pub fn encode_at_rate(
         pixels: &[u8],
         width: usize,
         height: usize,
         options: &EncodeOptions,
     ) -> Result<Vec<u8>, EncodeError> {
-        encode::encode(
-            pixels,
-            width,
-            height,
-            options,
-            encode::Rate::Hit,
-            &mut wavelet::Scratch::default(),
-        )
+        let options = options
+            .clone()
+            .with_profile(Profile::Optimized)
+            .with_software(0);
+        encode(pixels, width, height, &options)
     }
 }

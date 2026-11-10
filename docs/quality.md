@@ -75,14 +75,15 @@ requested):
 | 1 | 5 | 0.8795 | -12.0% | 24.49 | 0.8590 |
 | 2.25 | 5 | 2.0766 | -7.7% | 28.11 | 0.9151 |
 
-## Experimental encoder that hits the rate (#42)
+## The `Optimized` profile, which hits the rate (#42, #44)
 
-`wsq_codec::experimental::encode_at_rate`, a prototype for phase 3 of #17, hidden from the
-documentation and outside semantic versioning. It keeps the conformant stream layout and tables
+`Profile::Optimized` (it began as the hidden prototype `wsq_codec::experimental::encode_at_rate`,
+for phase 3 of #17, which now delegates to it; the figures below were measured with the
+prototype, whose encoder is the same). It keeps the conformant stream layout and tables
 and changes only the quantizer bin widths: those of the specification's bit allocation, all
 multiplied by one factor that a search chooses on the length of the whole stream. It stops on the
 first stream at most 0.5% below the target size (target: requested bpp × pixels / 8 bytes) and
-never returns one above it while one fits. Its streams carry implementation number 0. They are
+never returns one above it while one fits. Its streams carry implementation number 0 (a non-zero one is refused). They are
 not what NBIS writes for the requested rate, so they are never conformant.
 
 ### Conditions
@@ -164,7 +165,7 @@ Streams written earlier by NBIS, on another machine for instance, are compared w
 `--nbis-streams DIR` (files `IMAGE_RATE.wsq`); `--export DIR` writes the images as PGM for
 that. `WSQ_QUALITY_DIR` names a local directory of 8-bit PGM files to measure as well; it stays
 outside the repository, and no real fingerprint is ever committed. `--optimized` adds the
-experimental encoder of #42 and the conformant encoder at equal size:
+`Optimized` profile (#42, #44) and the conformant encoder at equal size:
 
 ```sh
 cargo bench --bench quality -- --large --optimized --nbis /path/to/nbis/bin --csv quality.csv

@@ -126,6 +126,10 @@ pub enum EncodeError {
     CommentTooLong(usize),
     /// The resolution is zero.
     InvalidPpi,
+    /// An implementation number other than 0 was given with the
+    /// [`Optimized`](crate::Profile::Optimized) profile. Only a conformant
+    /// stream may carry an implementation number the FBI assigned.
+    SoftwareRequiresConformant(u16),
     /// The memory the encoder needs for the image could not be allocated.
     OutOfMemory,
 }
@@ -142,6 +146,10 @@ impl fmt::Display for EncodeError {
             EncodeError::InvalidBitrate(r) => write!(f, "invalid bit rate {r}"),
             EncodeError::BitrateTooLow(r) => write!(f, "bit rate {r} is too low"),
             EncodeError::InvalidPpi => f.write_str("the resolution cannot be zero"),
+            EncodeError::SoftwareRequiresConformant(n) => write!(
+                f,
+                "implementation number {n} can only be written by the conformant profile"
+            ),
             EncodeError::OutOfMemory => f.write_str("not enough memory to encode the image"),
             EncodeError::CommentTooLong(len) => {
                 write!(f, "comment of {len} bytes does not fit in a segment")

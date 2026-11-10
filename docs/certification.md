@@ -122,11 +122,17 @@ The same values are available to other tools through `wsq_codec::inspect::read_q
 The plan is to certify a frozen, conformant encoder and decoder while the rest of the crate
 keeps improving:
 
-- a conformant profile, the current encoder, whose output stays aligned with the reference
-  implementation and, since it computes its own logarithms and powers, does not depend on the
-  platform; only it may write the implementation number the FBI assigns;
-- an optimized profile, free to depart from the reference as long as every WSQ decoder reads
-  its output, and never certified;
+- a conformant profile (`Profile::Conformant`, the default of `EncodeOptions::profile`), the
+  current encoder, whose output stays aligned with the reference implementation and, since it
+  computes its own logarithms and powers, does not depend on the platform; only it may write the
+  implementation number the FBI assigns;
+- an optimized profile (`Profile::Optimized`), free to depart from the reference as long as
+  every WSQ decoder reads its output, and never certified: it meets the requested size by
+  scaling the bin widths, so its streams fail the bin-width and size requirements of Annex AA
+  by design. The encoder enforces the rule: a non-zero `EncodeOptions::software` (field `Sf` of
+  the frame header) with `Optimized` is refused with `EncodeError::SoftwareRequiresConformant`,
+  so a stream that carries a certified implementation number is always a conformant one. The
+  `wsq cert encode` kit sets `Profile::Conformant` explicitly;
 - the conformant code in its own crate, versioned with the certificate, so that releases of the
   optimized encoder, bindings and tools leave the certified code untouched.
 
@@ -140,7 +146,8 @@ keeps improving:
 - **Images below 81 pixels, and the flat-image widening** (README, "Differences from NBIS") depart
   from NBIS. Check that no certification image triggers them.
 - **Certificate and releases.** Decided: the project ships certified releases (profile
-  `Conformant`) and optimized ones (profile `Optimized`), as described above. The certificate
+  `Conformant`) and optimized ones (profile `Optimized`, in the same crate since #44), as
+  described above. The certificate
   is tied to a version, so it is pursued once the API is frozen for 1.0; the order of the work
   is in the roadmap, issue #17 of the repository.
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Encoding profiles (#44): `EncodeOptions` gains `profile` (`with_profile`), a `#[non_exhaustive]`
+  `Profile` that is `Conformant` (the default, the encoder aligned with the reference, the only
+  one meant for certification, output unchanged) or `Optimized` (the encoder of #42: the bin
+  widths scaled to meet the size `bitrate` asks for, at most `Profile::OPTIMIZED_TOLERANCE` below
+  it, never certified). `encode`, `Encoder` and `encode_to` honour it. `Optimized` with a non-zero
+  `software` returns the new `EncodeError::SoftwareRequiresConformant`. `wsq encode` takes
+  `--profile conformant|optimized`. The hidden `experimental::encode_at_rate` now delegates to
+  the profile; the quality benchmark's `--optimized` mode uses the profile directly.
+
 ## 0.2.0
 
 - `decode` returns the stream's metadata with the pixels (#29): `Image` gains `software` and
