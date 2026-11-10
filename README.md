@@ -67,6 +67,33 @@ space, even with `max_pixels: None`.
 The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choice for 500 ppi
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.
 
+### Profiles
+
+`EncodeOptions::profile` chooses the encoder, and `encode`, `Encoder` and `encode_to` all honour
+it:
+
+- `Profile::Conformant`, the default: the encoder aligned with NBIS, byte for byte on the
+  fixtures. The actual size lands near the requested bit rate, not on it. It is the only profile
+  meant for FBI certification, and the only one that may write an implementation number
+  (`EncodeOptions::software`).
+- `Profile::Optimized`: the same layout and tables, but the quantizer bin widths are scaled by
+  one factor searched on the length of the whole stream, so that the stream ends at most
+  `Profile::OPTIMIZED_TOLERANCE` (0.5%) below the size `bitrate * width * height / 8` bytes, and
+  never above it while a stream fits. Any WSQ decoder reads it, but it is not what the reference
+  writes, so it is never conformant: a non-zero `software` is refused with
+  `EncodeError::SoftwareRequiresConformant`. It costs one quantization and one Huffman coding
+  per stream tried. `docs/quality.md` has the measurements.
+
+```rust
+use wsq_codec::{EncodeOptions, Profile};
+
+let options = EncodeOptions::default()
+    .with_profile(Profile::Optimized)
+    .with_bitrate(0.75);
+```
+
+`Profile` is `#[non_exhaustive]`, so that a target quality can join later.
+
 With the `image` feature (off by default, the only dependency the crate can pull), decoded
 images convert into `image::GrayImage` (`TryFrom`), `wsq_codec::image::encode_gray_image` encodes one, and
 `wsq_codec::image::register_hooks()` lets the `image` crate open `.wsq` files itself:
@@ -88,6 +115,7 @@ The `wsq` tool (crate `wsq-cli`, in `cli/`) converts between binary PGM and WSQ.
 
 ```sh
 wsq encode finger.pgm finger.wsq 0.75 500
+wsq encode --profile optimized finger.pgm finger.wsq 0.75 500   # meets the size, not certifiable
 wsq decode finger.wsq finger.pgm
 wsq info finger.wsq
 ```
@@ -200,9 +228,8 @@ and the encoding and decoding time (`cargo bench --bench quality`). It prints a 
 `--csv FILE`, every measurement as CSV. `--nbis BIN_DIR` runs NBIS 5.0.0's `cwsq` and `dwsq` on
 the same images and compares streams and reconstructions, and `--nbis-streams DIR` reads
 streams NBIS wrote elsewhere. `WSQ_QUALITY_DIR` names a local directory of PGM files to measure
-too; it stays outside the repository. `--optimized` also measures an experimental encoder that
-hits the requested rate (#42, not part of the stable API) against the conformant one at equal
-size. `docs/quality.md` holds the tables, with the conditions of measurement.
+too; it stays outside the repository. `--optimized` also measures the `Optimized` profile
+(#42, #44), which hits the requested rate, against the conformant one at equal size. `docs/quality.md` holds the tables, with the conditions of measurement.
 
 ## Contributing and security
 

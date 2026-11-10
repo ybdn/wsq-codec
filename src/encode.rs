@@ -4,7 +4,7 @@ use crate::quant::{self, QuantParams};
 use crate::tables::{self, EOI, FrameHeader, SOI};
 use crate::tree::{NUM_SUBBANDS, START_SUBBAND_2, START_SUBBAND_3, Trees};
 use crate::wavelet::{self, HIFILT, LOFILT};
-use crate::{EncodeOptions, math, nistcom, par};
+use crate::{EncodeOptions, Profile, math, nistcom, par};
 
 /// Smallest width and height the encoder accepts. Below it some subbands
 /// are too small for the variance estimate that drives quantization.
@@ -47,22 +47,11 @@ fn normalize(pixels: &[u8], data: &mut [&mut [f32]], threads: usize) -> (f32, f3
     (m_shift, r_scale)
 }
 
-/// How the encoder chooses the quantizer bin widths.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Rate {
-    /// The specification's bit allocation, as the reference implementation
-    /// does it: the actual rate lands near the requested one, not on it.
-    Allocated,
-    /// The bit allocation's widths, all scaled by one factor searched so
-    /// that the whole stream fits the requested size (#42, experimental).
-    Hit,
-}
-
-/// Share of the target size the [`Rate::Hit`] search may fall short by: it
-/// stops on the first stream between `1 - HIT_TOLERANCE` times the target
-/// and the target.
+/// Share of the target size the [`Profile::Optimized`] search may fall short
+/// by: it stops on the first stream between `1 - HIT_TOLERANCE` times the
+/// target and the target.
 pub(crate) const HIT_TOLERANCE: f64 = 0.005;
-/// Most streams the [`Rate::Hit`] search writes before keeping the best.
+/// Most streams the [`Profile::Optimized`] search writes before keeping the best.
 const HIT_MAX_TRIES: usize = 40;
 /// Bound on the base-2 logarithm of the scale factor.
 const HIT_LOG2_RANGE: f64 = 40.0;
@@ -75,9 +64,12 @@ pub(crate) fn encode(
     width: usize,
     height: usize,
     options: &EncodeOptions,
-    rate: Rate,
     scratch: &mut wavelet::Scratch,
 ) -> Result<Vec<u8>, EncodeError> {
+    // Only a conformant stream may carry the FBI's implementation number.
+    if options.profile == Profile::Optimized && options.software != 0 {
+        return Err(EncodeError::SoftwareRequiresConformant(options.software));
+    }
     let range = MIN_DIMENSION..=usize::from(u16::MAX);
     if !range.contains(&width) || !range.contains(&height) {
         return Err(EncodeError::InvalidDimensions { width, height });
@@ -113,11 +105,7 @@ pub(crate) fn encode(
         height: height as u16,
         m_shift,
         r_scale,
-        // Only the conformant encoder may carry the FBI's number.
-        software: match rate {
-            Rate::Allocated => options.software,
-            Rate::Hit => 0,
-        },
+        software: options.software,
     };
     let stream = Stream {
         trees: &trees,
@@ -125,8 +113,8 @@ pub(crate) fn encode(
         bitrate,
         threads,
     };
-    match rate {
-        Rate::Allocated => {
+    match options.profile {
+        Profile::Conformant => {
             let mut params = allocated;
             quant::limit_bin_widths(&mut params, &stats);
             let coeffs = quant::quantize(&data, &trees.q, &params, threads)?;
@@ -136,7 +124,7 @@ pub(crate) fn encode(
             stream.write(&mut out, &coeffs, &params)?;
             Ok(out)
         }
-        Rate::Hit => {
+        Profile::Optimized => {
             let head = header(width, height, options)?;
             let target = f64::from(bitrate) * (width * height) as f64 / 8.0;
             let out = hit_rate(&data, &stats, &allocated, &head, &stream, target);
@@ -268,7 +256,7 @@ fn scaled(allocated: &QuantParams, stats: &quant::Stats, factor: f32) -> QuantPa
     params
 }
 
-/// State of the [`Rate::Hit`] search.
+/// State of the [`Profile::Optimized`] search.
 struct Search<'a> {
     data: &'a [&'a [f32]],
     stats: &'a quant::Stats,
@@ -331,7 +319,7 @@ impl Search<'_> {
     }
 }
 
-/// The [`Rate::Hit`] search: the stream whose total length comes closest to
+/// The [`Profile::Optimized`] search: the stream whose total length comes closest to
 /// `target` bytes without exceeding it, found by scaling every bin width of
 /// the bit allocation by one factor.
 ///
@@ -442,7 +430,7 @@ mod tests {
 
     fn enc(w: usize, h: usize, options: &EncodeOptions) -> Result<Vec<u8>, EncodeError> {
         let mut scratch = wavelet::Scratch::default();
-        encode(&checker(w, h), w, h, options, Rate::Allocated, &mut scratch)
+        encode(&checker(w, h), w, h, options, &mut scratch)
     }
 
     #[test]
@@ -482,11 +470,18 @@ mod tests {
     }
 
     #[test]
-    fn hit_rate_never_carries_the_software_number() {
+    fn optimized_profile_refuses_the_software_number() {
         let (w, h) = (101, 97);
-        let options = EncodeOptions::default().with_software(0x1234);
         let mut scratch = wavelet::Scratch::default();
-        let wsq = encode(&checker(w, h), w, h, &options, Rate::Hit, &mut scratch).unwrap();
+        let options = EncodeOptions::default()
+            .with_profile(crate::Profile::Optimized)
+            .with_software(0x1234);
+        assert_eq!(
+            encode(&checker(w, h), w, h, &options, &mut scratch).unwrap_err(),
+            EncodeError::SoftwareRequiresConformant(0x1234)
+        );
+        let options = options.with_software(0);
+        let wsq = encode(&checker(w, h), w, h, &options, &mut scratch).unwrap();
         assert_eq!(read_info(&wsq).unwrap().software, 0);
     }
 
@@ -495,7 +490,7 @@ mod tests {
         let options = EncodeOptions::default();
         let err = |w, h, pixels: usize, o: &EncodeOptions| {
             let mut scratch = wavelet::Scratch::default();
-            encode(&vec![0; pixels], w, h, o, Rate::Allocated, &mut scratch).unwrap_err()
+            encode(&vec![0; pixels], w, h, o, &mut scratch).unwrap_err()
         };
         let m = MIN_DIMENSION;
         assert_eq!(
@@ -535,7 +530,7 @@ mod tests {
         let mut scratch = wavelet::Scratch::default();
         let flat = vec![77u8; w * h];
         let options = EncodeOptions::default();
-        let wsq = encode(&flat, w, h, &options, Rate::Allocated, &mut scratch).unwrap();
+        let wsq = encode(&flat, w, h, &options, &mut scratch).unwrap();
         assert_eq!(decode(&wsq).unwrap().pixels, flat);
     }
 

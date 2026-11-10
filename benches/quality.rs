@@ -36,8 +36,7 @@
 //! stream or in the reconstruction is reported and makes the run fail. Without `--nbis*`
 //! nothing is judged.
 //!
-//! `--optimized` also measures the experimental encoder of #42
-//! (`wsq_codec::experimental::encode_at_rate`), which scales the bin widths to hit the requested
+//! `--optimized` also measures the `Optimized` profile (`wsq_codec::Profile`, #42 and #44), which scales the bin widths to hit the requested
 //! rate, and the conformant encoder at equal size: the requested rate that makes the conformant
 //! stream closest in length to the optimized one, found by bisection. With `--nbis`, NBIS's
 //! `dwsq` decodes every optimized stream too, and a reconstruction that differs from this
@@ -505,6 +504,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             for rate in &args.rates {
                 let target: f32 = rate.parse()?;
                 let options = encode_options(target);
+                let optimized_options = options.clone().with_profile(wsq_codec::Profile::Optimized);
                 let (enc, wsq) = fastest(args.runs, || {
                     wsq_codec::encode(&src.pixels, src.width, src.height, &options)
                 });
@@ -537,12 +537,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                 });
                 let optimized = if args.optimized {
                     let (enc, wsq) = fastest(args.runs, || {
-                        wsq_codec::experimental::encode_at_rate(
-                            &src.pixels,
-                            src.width,
-                            src.height,
-                            &options,
-                        )
+                        wsq_codec::encode(&src.pixels, src.width, src.height, &optimized_options)
                     });
                     let wsq = wsq?;
                     let (dec, image) =

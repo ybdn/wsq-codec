@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! wsq --help | --version
-//! wsq encode in.pgm out.wsq [bitrate] [ppi]
+//! wsq encode [--profile conformant|optimized] in.pgm out.wsq [bitrate] [ppi]
 //! wsq decode in.wsq out.pgm
 //! wsq info in.wsq
 //! wsq check DIR
@@ -32,7 +32,10 @@ use std::{env, fs, process};
 
 const USAGE: &str = "\
 Usage:
-  wsq encode IN.pgm OUT.wsq [BITRATE] [PPI]   compress a binary PGM (P5)
+  wsq encode [--profile P] IN.pgm OUT.wsq [BITRATE] [PPI]
+                                              compress a binary PGM (P5); P is `conformant`
+                                              (default, as the reference) or `optimized`
+                                              (meets the requested size, never certified)
   wsq decode IN.wsq OUT.pgm                   decompress to a binary PGM
   wsq info IN.wsq                             print the header, without decoding
   wsq check DIR                               decode every WSQ stream under DIR
@@ -42,12 +45,52 @@ Usage:
 
 Exit status: 0 success, 1 error, 64 usage error; `cert` also uses 2 and 3.";
 
+/// Takes `--profile P` or `--profile=P` out of the arguments of `encode`, wherever it stands.
+/// `Err` carries a usage error message.
+fn take_profile(args: &[String]) -> Result<(wsq_codec::Profile, Vec<String>), String> {
+    let mut profile = wsq_codec::Profile::Conformant;
+    let mut rest = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let value = if arg == "--profile" {
+            args.next()
+                .map(String::as_str)
+                .ok_or("--profile needs a value: conformant or optimized")?
+        } else if let Some(value) = arg.strip_prefix("--profile=") {
+            value
+        } else {
+            rest.push(arg.clone());
+            continue;
+        };
+        profile = match value {
+            "conformant" => wsq_codec::Profile::Conformant,
+            "optimized" => wsq_codec::Profile::Optimized,
+            other => {
+                return Err(format!(
+                    "unknown profile `{other}`: use conformant or optimized"
+                ));
+            }
+        };
+    }
+    Ok((profile, rest))
+}
+
 fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
-    match args {
+    let (profile, args) = match args.first().map(String::as_str) {
+        Some("encode") => match take_profile(&args[1..]) {
+            Ok((profile, rest)) => (profile, [&args[..1], &rest].concat()),
+            Err(message) => {
+                eprintln!("wsq: {message}\n\n{USAGE}");
+                process::exit(64);
+            }
+        },
+        _ => (wsq_codec::Profile::Conformant, args.to_vec()),
+    };
+    match &args[..] {
         [cmd, input, output, rest @ ..] if cmd == "encode" && rest.len() <= 2 => {
             let data = fs::read(input)?;
             let (width, height, pixels) = corpus::read_pgm(&data)?;
-            let mut options = wsq_codec::EncodeOptions::default();
+            let mut options = wsq_codec::EncodeOptions::default().with_profile(profile);
             if let Some(bitrate) = rest.first() {
                 options.bitrate = bitrate.parse()?;
             }
