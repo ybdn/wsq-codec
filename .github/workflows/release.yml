@@ -156,3 +156,71 @@ jobs:
         if: github.event_name == 'push'
         working-directory: wasm/pkg
         run: npm publish --provenance --access public
+
+  # The C library (#50), attached to the GitHub release that `publish` created: the header, the
+  # static and shared libraries and the licence, one archive per platform. A manual run builds
+  # and packages without uploading anything (there is no release to attach to). Only this job
+  # writes to the release: `publish` has the other write permission, for crates.io.
+  capi:
+    name: C library (${{ matrix.target }})
+    needs: [verify, publish]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: write # attach the archives to the GitHub release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            libs: libwsq.a libwsq.so
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            libs: libwsq.a libwsq.so
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            libs: libwsq.a libwsq.dylib
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            libs: wsq.lib wsq.dll wsq.dll.lib
+            archive: zip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - run: cargo build --release -p wsq-capi
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+          LIBS: ${{ matrix.libs }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          name="wsq-capi-$TAG-$TARGET"
+          mkdir -p "$name/include" "$name/lib"
+          cp capi/include/wsq.h "$name/include/"
+          for lib in $LIBS; do cp "target/release/$lib" "$name/lib/"; done
+          cp LICENSE "$name/LICENSE"
+          cp capi/README.md "$name/README.md"
+          if [ "$ARCHIVE" = zip ]; then
+            7z a -tzip "$name.zip" "$name"
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          echo "file=$name.$ARCHIVE" >> "$GITHUB_OUTPUT"
+          ls -l "$name" "$name/lib"
+      - name: Attach to the GitHub release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          FILE: ${{ steps.package.outputs.file }}
+        run: gh release upload "$TAG" "$FILE" --clobber

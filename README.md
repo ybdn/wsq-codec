@@ -18,7 +18,7 @@ carry in Types 4 and 14.
 > GDPR article 9. Never attach them to an issue or a pull request: see
 > [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
-- Pure Rust, no dependencies (an optional `image` integration aside), no `unsafe`.
+- Pure Rust, no dependencies (an optional `image` integration aside), no `unsafe` (the C API crate, `capi`, aside: see below).
 - Matches NIST's reference implementation (NBIS): decoding gives the same pixels, and encoding
   gives the same bytes for the same image and bit rate, except where NBIS fails (see below).
   The tests check both against fixtures that NBIS produced.
@@ -173,6 +173,37 @@ The [demo page](https://ybdn-ei.github.io/wsq-codec/) opens `.wsq` files and con
 to WSQ in your browser: no file is uploaded, and a Content-Security-Policy lets the page load
 only its own files. See [wasm/README.md](wasm/README.md) for the API and how to build it
 (`wasm/build.sh`).
+
+## C API
+
+C and C++ programs (AFIS software, enrollment stations, SDKs that link NBIS today) can use the
+codec through a C library, `libwsq`, built from the `capi` crate: a static and a shared library
+and the header `capi/include/wsq.h`, attached to each GitHub release for Linux, macOS and Windows.
+Buffers and lengths in, status codes out, and the library allocates what it returns and frees it
+through a matching function:
+
+```c
+#include "wsq.h"
+
+wsq_encode_options options = wsq_encode_options_default();
+options.ppi = 500;
+
+uint8_t *stream; size_t stream_len;
+if (wsq_encode(pixels, width * height, width, height, &options, &stream, &stream_len) == WSQ_OK) {
+    wsq_image image;
+    if (wsq_decode(stream, stream_len, NULL, &image) == WSQ_OK) {
+        /* image.info.width, image.info.ppi, image.pixels, ... */
+        wsq_image_free(&image);
+    }
+    wsq_free_bytes(stream, stream_len);
+}
+```
+
+No panic crosses the boundary (`WSQ_ERR_PANIC`), options structures carry a `struct_size` so that
+the ABI can grow, and [capi/README.md](capi/README.md) documents linking, ownership, thread
+safety, the error codes and the ABI policy. CI builds a C test program against the library on
+Linux, macOS and Windows. The core crate stays `forbid(unsafe_code)`; the `unsafe` the C
+boundary needs is confined to the `capi` crate.
 
 ## ANSI/NIST-ITL transactions
 
