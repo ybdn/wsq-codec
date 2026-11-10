@@ -18,7 +18,7 @@ carry in Types 4 and 14.
 > GDPR article 9. Never attach them to an issue or a pull request: see
 > [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
-- Pure Rust, no dependencies (an optional `image` integration aside), no `unsafe`.
+- Pure Rust, no dependencies (an optional `image` integration aside), no `unsafe` (the C API crate, `capi`, aside: see below).
 - Matches NIST's reference implementation (NBIS): decoding gives the same pixels, and encoding
   gives the same bytes for the same image and bit rate, except where NBIS fails (see below).
   The tests check both against fixtures that NBIS produced.
@@ -31,6 +31,11 @@ carry in Types 4 and 14.
   allocating anything for them.
 
 ## Usage
+
+```toml
+[dependencies]
+wsq-codec = "1"
+```
 
 ```rust
 use wsq_codec::{EncodeOptions, decode, encode};
@@ -59,13 +64,70 @@ returns the same metadata (`ppi`, `software`, `comments`) with the pixels.
 about 8 bytes per pixel at its peak (787 MiB measured for a 10000 by 10000 image on Linux
 x86-64). A stream of under 1 KB can declare such an image, so on untrusted input keep the limit
 low. For ANSI/NIST transactions, call `read_info` first and compare the dimensions with the
-record's own fields, or derive `max_pixels` from them. The image-sized buffers are allocated
-fallibly: when one cannot be, `decode_with` and `encode` return `OutOfMemory` instead of
+record's own fields, or derive `max_pixels` from them. Every buffer whose size follows the
+pixel count is allocated fallibly: the coefficients, the transformed image and its scratch
+buffer, the output pixels, the encoder's compressed output (reserved from the expected size,
+then grown with `try_reserve`) and the wavelet transform's transposition blocks (on every
+thread). When one cannot be, `decode_with` and `encode` return `OutOfMemory` instead of
 aborting, and `decode_with` does the same on a 32-bit target for a size beyond its address
-space, even with `max_pixels: None`.
+space, even with `max_pixels: None`. What stays infallible is small and does not follow the
+pixel count: tables of fixed size, the comments you give, vectors with one entry per row or
+per subband (at most 65535 rows), and the wavelet filters' per-line plans (a few MiB at the
+largest dimension). `certified/src/mem.rs` documents the `grep` that lists them.
 
 The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choice for 500 ppi
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.
+
+### Profiles
+
+`EncodeOptions::profile` chooses the encoder, and `encode`, `Encoder` and `encode_to` all honour
+it:
+
+- `Profile::Conformant`, the default: the encoder aligned with NBIS, byte for byte on the
+  fixtures. The actual size lands near the requested bit rate, not on it. It is the only profile
+  meant for FBI certification, and the only one that may write an implementation number
+  (`EncodeOptions::software`).
+- `Profile::Optimized`: the same layout and tables, but the quantizer bin widths are scaled by
+  one factor searched on the length of the whole stream, so that the stream ends at most
+  `Profile::OPTIMIZED_TOLERANCE` (0.5%) below the size `bitrate * width * height / 8` bytes, and
+  never above it while a stream fits. Any WSQ decoder reads it, but it is not what the reference
+  writes, so it is never conformant: a non-zero `software` is refused with
+  `EncodeError::SoftwareRequiresConformant`. It costs one quantization and one Huffman coding
+  per stream tried. `docs/quality.md` has the measurements.
+
+```rust
+use wsq_codec::{EncodeOptions, Profile};
+
+let options = EncodeOptions::default()
+    .with_profile(Profile::Optimized)
+    .with_bitrate(0.75);
+```
+
+`Profile` is `#[non_exhaustive]`, so that a target quality can join later.
+
+### Dimensions
+
+Widths and heights are `usize`, but the format stores them in 16 bits: `wsq_codec::MAX_DIMENSION`
+is 65535, and every `Image` and `Info` stays within it. `encode` also needs both dimensions to be
+at least `wsq_codec::MIN_ENCODE_DIMENSION` (81).
+
+### Errors
+
+`DecodeError` and `EncodeError` (also `Clone` and `PartialEq`, the first `Eq` and `Hash` too)
+are what `decode*`, `read_info`, `encode` and `Encoder` return. `decode_from` returns a
+`ReadError` and `encode_to` a `WriteError`, which add an `Io` variant for the reader or writer.
+All four are `#[non_exhaustive]`, `Send + Sync`, and implement `std::error::Error`. Match on
+the variants, with `..` in struct variants (`DecodeError::TooLarge { max_pixels, .. }`), not on
+the text of the messages.
+
+### Stability
+
+From 1.0 the public API follows [semantic versioning](https://semver.org), and CI runs
+`cargo-semver-checks` against the last release. The decoded pixels and the conformant encoder's
+bytes are covered too; the bytes of the `Optimized` profile, error message texts and `Debug`
+output are not. The MSRV (1.85) rises in a minor release, never in a patch release. The `image`
+feature is tied to `image` 0.25. [docs/api-1.0.md](docs/api-1.0.md) records the review behind
+the 1.0 API.
 
 With the `image` feature (off by default, the only dependency the crate can pull), decoded
 images convert into `image::GrayImage` (`TryFrom`), `wsq_codec::image::encode_gray_image` encodes one, and
@@ -78,7 +140,32 @@ let gray = image::open("finger.wsq")?.to_luma8();
 
 `register_hooks_with(DecodeOptions)` sets the options the hooks decode with (the hooks are global:
 the first registration wins). `WsqDecoder` honours `image::Limits`: `max_alloc` must cover about
-8 bytes per pixel, or the image is refused before decoding.
+8 bytes per pixel, or the image is refused before decoding. `DecodeOptions::max_pixels` is checked
+when the image is read.
+
+## Python
+
+```sh
+pip install wsq-codec
+```
+
+```python
+import numpy as np
+import wsq_codec
+
+pixels = np.full((389, 416), 128, dtype=np.uint8)           # (height, width), uint8
+wsq = wsq_codec.encode(pixels, bitrate=0.75, ppi=500)       # bytes; profile="optimized" too
+image = wsq_codec.decode(wsq)                               # image.pixels: (height, width) uint8
+```
+
+`decode`, `read_info` and `encode` map to the Rust functions, release the GIL, and raise
+`wsq_codec.DecodeError` / `EncodeError` (both `ValueError`, through `wsq_codec.WsqError`) with the
+Rust message; `python/README.md` has the API. The package is built with PyO3 and maturin
+(`python/`), as one `abi3` wheel per platform for CPython 3.9 and later, and `python/tests` runs a
+round trip and compares the conformant output with the NBIS fixtures on Linux, macOS and Windows
+in CI. The PyPI name is `wsq-codec` (import `wsq_codec`): the `wsq` package already on PyPI wraps
+NBIS's C sources and is unrelated. Checked on 2026-11-10: `https://pypi.org/pypi/wsq-codec/json`
+answered 404 (the name was free); `wsq` answered 200.
 
 ## Command line
 
@@ -88,9 +175,59 @@ The `wsq` tool (crate `wsq-cli`, in `cli/`) converts between binary PGM and WSQ.
 
 ```sh
 wsq encode finger.pgm finger.wsq 0.75 500
+wsq encode --profile optimized finger.pgm finger.wsq 0.75 500   # meets the size, not certifiable
 wsq decode finger.wsq finger.pgm
 wsq info finger.wsq
 ```
+
+## WebAssembly and npm
+
+The codec also runs in the browser and in Node.js, as the npm package
+[`wsq-codec`](https://www.npmjs.com/package/wsq-codec) (the `wasm/` crate `wsq-wasm`, a thin
+wasm-bindgen wrapper; `wsq-codec` itself gains no dependency):
+
+```js
+import { decode, encode } from "wsq-codec";
+
+const image = decode(wsqBytes);   // { width, height, ppi, software, comments, pixels }
+const wsq = encode(image.pixels, image.width, image.height, { bitrate: 0.75, profile: "optimized" });
+```
+
+The [demo page](https://ybdn-ei.github.io/wsq-codec/) opens `.wsq` files and converts PNG or JPEG
+to WSQ in your browser: no file is uploaded, and a Content-Security-Policy lets the page load
+only its own files. See [wasm/README.md](wasm/README.md) for the API and how to build it
+(`wasm/build.sh`).
+
+## C API
+
+C and C++ programs (AFIS software, enrollment stations, SDKs that link NBIS today) can use the
+codec through a C library, `libwsq`, built from the `capi` crate: a static and a shared library
+and the header `capi/include/wsq.h`, attached to each GitHub release for Linux, macOS and Windows.
+Buffers and lengths in, status codes out, and the library allocates what it returns and frees it
+through a matching function:
+
+```c
+#include "wsq.h"
+
+wsq_encode_options options = wsq_encode_options_default();
+options.ppi = 500;
+
+uint8_t *stream; size_t stream_len;
+if (wsq_encode(pixels, width * height, width, height, &options, &stream, &stream_len) == WSQ_OK) {
+    wsq_image image;
+    if (wsq_decode(stream, stream_len, NULL, &image) == WSQ_OK) {
+        /* image.info.width, image.info.ppi, image.pixels, ... */
+        wsq_image_free(&image);
+    }
+    wsq_free_bytes(stream, stream_len);
+}
+```
+
+No panic crosses the boundary (`WSQ_ERR_PANIC`), options structures carry a `struct_size` so that
+the ABI can grow, and [capi/README.md](capi/README.md) documents linking, ownership, thread
+safety, the error codes and the ABI policy. CI builds a C test program against the library on
+Linux, macOS and Windows. The core crate stays `forbid(unsafe_code)`; the `unsafe` the C
+boundary needs is confined to the `capi` crate.
 
 ## ANSI/NIST-ITL transactions
 
@@ -135,6 +272,13 @@ The crate is not certified by the FBI. `docs/certification.md` describes the pro
 plan to pursue it, and the `cert` commands of the example, which run the certification tests
 locally and compare the output with NIST's reference files.
 
+The code a certificate would cover is split out as the [`wsq-certified`](certified/README.md)
+crate: the decoder, the conformant encoder and `inspect`, versioned with the certificate, built
+with a pinned compiler (`certified/rust-toolchain.toml`) and changed only on purpose. `wsq-codec`
+depends on it at an exact version and re-exports it, so nothing changes for its users; it adds
+the optimized profile and the `image` feature, which are not certified. The plan may change once
+NIST answers the maintainer's questions (#34).
+
 ## Differences from NBIS
 
 The encoder departs from NBIS only where NBIS's output is broken:
@@ -163,34 +307,69 @@ are correctly rounded except within about 2^-100 of the midpoint between two `f6
 claim is determinism, not exact rounding. glibc's `log` and `pow`, which NBIS used for the
 fixtures, return the correctly rounded result on all but rare inputs (about 1 in 1000 for
 `pow`); an image whose bit allocation hits one of those would get a quantizer bin differing from
-NBIS's in its last digit, identically on every platform. CI checks the NBIS fixtures and the
-benchmark's stream hashes on Linux, macOS and Windows; `docs/certification.md` lists the runs
-and what has not been verified.
+NBIS's in its last digit, identically on every platform.
+
+Targets where this has been executed, not only built (as of 10 November 2026; the test suite
+includes the NBIS fixtures, the stream hashes are those of `benches/hashes.txt`;
+`docs/certification.md` lists the runs and what has not been verified):
+
+- x86-64 Linux, macOS and Windows, on every pull request: tests and stream hashes.
+- AArch64 Linux (`ubuntu-24.04-arm`), on every pull request, job `aarch64`: tests and stream
+  hashes.
+- `wasm32-wasip1` under wasmtime 50.0.1, on every pull request, job `wasi`: tests and stream
+  hashes, with no thread (the codec then runs every job on the calling thread).
+- `s390x-unknown-linux-gnu`, big-endian, emulated by QEMU, weekly and on demand, job `s390x` of
+  `scheduled.yml`: tests.
+
+Not verified: RISC-V, other big-endian targets, and the architecture of the macOS and Windows
+runners (their logs do not state it).
 
 ## Performance
 
-The fastest of 5 runs on generated images, in memory, on a 4-core cloud x86-64 machine
-(`cargo bench --bench codec -- THREADS`):
+Every figure below is a median with its 95 % bootstrap interval, measured by
+[`bench/nbis-compare`](bench/nbis-compare/) on **10 November 2026** on a shared cloud virtual
+machine (Intel Xeon at 2.10 GHz, 4 vCPUs, 16 GB, Linux 6.18 x86-64, rustc 1.97.0, Cargo's `release`
+profile) that other jobs were using while it ran (CPU 54 % busy before the run started, 75 % busy
+during it): the times are noisy and the intervals show how much. One call per process, in memory,
+on generated images (not fingerprints), 0.75 bit/pixel, 500 ppi declared; 31 calls per cell, 11 for
+the 5500×8000 image. Times in ms.
 
 | image | encode, 1 thread | decode, 1 thread | encode, 4 threads | decode, 4 threads |
 |---|---|---|---|---|
-| 500 ppi rolled print, 800×750 | 11 ms | 10 ms | 10 ms | 9 ms |
-| 1000 ppi, 1600×1500 | 43 ms | 38 ms | 23 ms | 19 ms |
-| 1000 ppi palm, 5500×8000 | 1.13 s | 1.06 s | 0.45 s | 0.41 s |
+| 500 ppi rolled print, 800×750 | 14.5 [13.5, 17.4] | 13.8 [12.5, 16.0] | 15.7 [14.8, 17.4] | 14.6 [14.0, 16.6] |
+| 1000 ppi, 1600×1500 | 58.4 [55.1, 59.8] | 55.4 [52.3, 64.4] | 50.2 [46.2, 53.9] | 45.2 [40.3, 48.5] |
+| 1000 ppi palm, 5500×8000 | 1421 [1281, 1501] | 1282 [1237, 1342] | 1055 [732, 1264] | 943 [654, 1059] |
 
-`docs/nbis-comparison.md` compares speed and memory with NBIS 5.0.0 (distributions over repeated
-calls, one process per call, one and four threads), with the protocol, the conditions and the
-limits; `bench/nbis-compare` repeats it. It is a measurement on synthetic images on one machine, not
-a claim for other cases.
+- **Against NBIS 5.0.0** (gcc 13.3, `-O2`, one thread, same calls, same machine, interleaved), at one
+  thread: the crate's median was 0.43 to 0.58 times NBIS's when encoding and 0.33 to 0.39 times when
+  decoding on that run (upper ends of the 95 % intervals: 0.67 and 0.43); a second run the same day,
+  under a heavier load, gave 0.38 to 0.54 and 0.28 to 0.36 (upper ends: 0.78 and 0.49). Both on
+  synthetic images only; see [`docs/nbis-comparison.md`](docs/nbis-comparison.md).
+- **Threads.** A gain was measured only on the 5500×8000 image: against one thread, 1.2 to 1.8 times
+  faster at 2, 4 or 8 threads (95 % interval above 1 in both runs, in 23 of 24 series), far from the
+  four times four cores could give; the earlier run of 4 November 2026 (older codec, more loaded
+  machine) did not show it, so it is a result of two runs, not a settled one. On 1600×1500 images it appeared in the first run and not in the
+  second: **not established**. On 800×750 no gain was measured in either run, and in 7 of the 24
+  series (all at 4 or 8 threads) the threaded calls were measurably slower. The 4-thread columns
+  above must be read with this in mind.
+- **Memory.** The memory a call adds is higher than NBIS's, not lower: at one thread 4 % to 49 %
+  more depending on the image (the smaller the image, the larger the share), more with more threads
+  (up to 2.1 times on the 800×750 image at 8 threads). Both are read the same way (`VmHWM` in
+  `/proc/self/status`). Both need about 8 bytes per pixel at the peak.
+- Not measured: real fingerprints (the harness has a local mode for them, not run yet), other
+  machines, other compilers or NBIS builds, macOS, Windows, ARM.
+
+`cargo bench --bench codec -- THREADS` times the same codec in one process, as the fastest of a few
+runs: it tracks regressions and gives no interval, so its figures are not quoted.
 
 The work stays on the calling thread unless `EncodeOptions::threads` or
 `DecodeOptions::threads` asks for more (0 means one per core). The wavelet transform starts its
 threads once per image and splits every pass by rows; quantization, dequantization and the
 subband statistics are split by subbands or rows, the three Huffman blocks are coded and decoded
 side by side, and the image-sized buffers are allocated in bands, each zeroed by its own thread.
-Each value goes through the same arithmetic either way, so the result is unchanged. Threads pay
-off on large images; on small ones they cost nothing. `Decoder` and `Encoder` keep their buffers
-from one image to the next, which spares a batch of images their allocation.
+Each value goes through the same arithmetic either way, so the result is unchanged. Threads cost
+time on small images and help, by the measure above, only on large ones. `Decoder` and `Encoder`
+keep their buffers from one image to the next, which spares a batch of images their allocation.
 
 ## Quality
 
@@ -200,9 +379,30 @@ and the encoding and decoding time (`cargo bench --bench quality`). It prints a 
 `--csv FILE`, every measurement as CSV. `--nbis BIN_DIR` runs NBIS 5.0.0's `cwsq` and `dwsq` on
 the same images and compares streams and reconstructions, and `--nbis-streams DIR` reads
 streams NBIS wrote elsewhere. `WSQ_QUALITY_DIR` names a local directory of PGM files to measure
-too; it stays outside the repository. `--optimized` also measures an experimental encoder that
-hits the requested rate (#42, not part of the stable API) against the conformant one at equal
-size. `docs/quality.md` holds the tables, with the conditions of measurement.
+too; it stays outside the repository. `--optimized` also measures the `Optimized` profile
+(#42, #44), which hits the requested rate, against the conformant one at equal size. `docs/quality.md` holds the tables, with the conditions of measurement.
+
+PSNR does not say whether a decoded image still matches, so the same tool can also run two
+external programs (each optional, none a dependency of the crate): NIST's NFIQ 2 score
+(`--nfiq2 PATH`) and NBIS's `mindtct` and `bozorth3` (`--mindtct PATH --bozorth3 PATH`), which
+give the change in NFIQ 2, the change in the number of minutiae and the match score of the
+decoded image against the original, with the original's own score as the reference. Without a
+tool, its columns read "not run". `docs/quality.md` explains how to build them.
+
+What was measured, on 10 November 2026: three **synthetic** ridge patterns (generated, not
+fingerprints), 640x704 at 500 ppi, at 0.5 to 2.25 bits per pixel, with NFIQ 2 2.3.1 and NBIS
+5.0.0 (36 reconstructions). NFIQ 2 changed by -9 to +2 points from the original to the decoded
+image, the decoded image's minutiae matched the original's at 74% to 99% of the original's
+score against itself, and the experimental encoder and the conformant encoder at equal size
+were not distinguishable on these measures. Three patterns that are not fingerprints say
+nothing about real prints, on which this was **not measured**: no real fingerprint may be
+committed or published, so run it on a local directory (`WSQ_QUALITY_DIR`, reported in
+aggregate only) and read the figures there.
+
+```sh
+cargo bench --bench quality -- --optimized --nfiq2 /path/to/nfiq2 \
+  --mindtct /path/to/mindtct --bozorth3 /path/to/bozorth3
+```
 
 ## Contributing and security
 
@@ -212,5 +412,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks to run and the branch flow
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The test fixtures in `tests/data` were written by NIST's NBIS,
-which is in the public domain; see [tests/data/README.md](tests/data/README.md).
+MIT, see [LICENSE](LICENSE). The test fixtures in `certified/tests/data` were written by NIST's NBIS,
+which is in the public domain; see [certified/tests/data/README.md](certified/tests/data/README.md).

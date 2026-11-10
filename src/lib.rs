@@ -30,45 +30,75 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Dimensions
+//!
+//! Widths and heights are `usize` throughout, to match slice lengths and the
+//! `width * height` arithmetic, but the format stores them in 16 bits: no
+//! stream and no image this crate handles exceeds [`MAX_DIMENSION`] (65535)
+//! on a side. The encoder also refuses images under
+//! [`MIN_ENCODE_DIMENSION`] (81) on a side. Bindings and converters can
+//! therefore narrow a dimension to `u16` after a successful call, and must
+//! check it before an encoding.
+//!
+//! # Stability
+//!
+//! From 1.0 the public API follows semantic versioning: the items this
+//! documentation lists, their signatures, the variants and fields of the
+//! types, the output of the conformant encoder (byte for byte), the decoded
+//! pixels, and the `image` feature's API. Four things are not covered and may
+//! change in a minor release: the exact bytes of the
+//! [`Optimized`](Profile::Optimized) profile's streams (its promises about
+//! size are covered), the text of error messages and the `&'static str`
+//! reasons of [`DecodeError`], the `Debug` output of any type, and speed and
+//! memory use. Minimum Supported Rust Version bumps are minor releases. The
+//! `image` feature exposes the `image` 0.25 crate's types: a new `image`
+//! major version will come as a new feature, not as a change to this one. See
+//! `docs/api-1.0.md` in the repository for the review behind this API.
+//!
+//! # The certified part
+//!
+//! The decoder, the conformant encoder and [`inspect`] come from the
+//! [`wsq-certified`](https://docs.rs/wsq-certified) crate, which this crate
+//! re-exports and depends on at one exact version: that crate is the code
+//! the FBI certification covers, and it only changes when a new
+//! certification is intended. This crate adds what is not certified: the
+//! [`Optimized`](Profile::Optimized) profile and the `image` integration.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
-mod bits;
-mod decode;
-mod encode;
-mod error;
-mod huffman;
 #[cfg(feature = "image")]
 pub mod image;
-pub mod inspect;
-mod math;
-mod mem;
-mod nistcom;
-mod par;
-mod quant;
-mod tables;
-#[cfg(test)]
-mod testgen;
-mod tree;
-mod wavelet;
+mod optimized;
 
-pub use error::{DecodeError, EncodeError, ReadError, WriteError};
+#[doc(inline)]
+pub use wsq_certified::{
+    DEFAULT_MAX_PIXELS, DecodeError, DecodeOptions, EncodeError, Info, MAX_DIMENSION,
+    MIN_ENCODE_DIMENSION, ReadError, WriteError, decode_into, inspect, read_info,
+};
 
-/// Default for [`DecodeOptions::max_pixels`]: 100 million pixels, which
-/// covers a 1000 ppi palm print (about 44 million) with room to spare.
-pub const DEFAULT_MAX_PIXELS: usize = 100_000_000;
+use wsq_certified::for_wsq_codec::Scratch;
 
 /// A decoded 8-bit grayscale image, with what its stream says about it, so
 /// that [`decode`] alone gives the pixels and the metadata (no second
 /// [`read_info`] call is needed).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The metadata fields repeat those of [`Info`] one for one, and stay flat
+/// rather than nested in an `info` field, so that `image.width` reads as it
+/// does on the image of any other crate.
+///
+/// This is a type of `wsq-codec`, not of `wsq-certified`, which has one of its
+/// own: the `image` feature implements `TryFrom<Image> for GrayImage`, and
+/// Rust only allows that for a type of the crate that writes the impl.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Image {
-    /// Width in pixels, at most 65535 as the format allows.
+    /// Width in pixels, from 1 to [`MAX_DIMENSION`] (65535).
     pub width: usize,
-    /// Height in pixels, at most 65535 as the format allows.
+    /// Height in pixels, from 1 to [`MAX_DIMENSION`] (65535).
     pub height: usize,
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.
@@ -83,83 +113,203 @@ pub struct Image {
     pub pixels: Vec<u8>,
 }
 
-/// What a WSQ stream says about its image, read without decoding it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Info {
-    /// Width in pixels, at most 65535 as the format allows.
-    pub width: usize,
-    /// Height in pixels, at most 65535 as the format allows.
-    pub height: usize,
-    /// Scanning resolution in pixels per inch, when the stream records it
-    /// in a NISTCOM comment.
-    pub ppi: Option<u32>,
-    /// Implementation number of the encoder that wrote the stream, as
-    /// assigned by the FBI; 0 when unassigned.
-    pub software: u16,
-    /// Payloads of the comment segments before the image data.
-    pub comments: Vec<Vec<u8>>,
-}
-
-/// Decoder settings.
-///
-/// ```
-/// let options = wsq_codec::DecodeOptions::default().with_max_pixels(Some(20_000_000));
-/// # let _ = options;
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct DecodeOptions {
-    /// Largest `width * height` the decoder accepts, or `None` for no
-    /// limit. The frame header alone decides the size, so a small crafted
-    /// stream can otherwise claim an image of several gigapixels.
-    ///
-    /// Decoding needs about 8 bytes per pixel at its peak: 4 for the
-    /// transformed image and 4 for the wavelet scratch buffer. The quantized
-    /// coefficients (at most 2 bytes per pixel) are dropped before the
-    /// scratch buffer is allocated, and the output pixels (1 byte) are
-    /// allocated after it is gone. A stream of under 1 KB that declares
-    /// 10000 by 10000 pixels with every bin at zero, which a flat image
-    /// legitimately produces and so cannot be rejected, peaked at 787 MiB
-    /// (measured on Linux x86-64, one thread). The limit is therefore the
-    /// only defense against a stream that is cheap to send and costly to
-    /// decode. When the buffers cannot be allocated, or are larger than the
-    /// address space of a 32-bit target, decoding fails with
-    /// [`DecodeError::OutOfMemory`] instead of aborting or panicking.
-    ///
-    /// For ANSI/NIST transactions, call [`read_info`] first and compare the
-    /// dimensions with the record's own fields, or derive the limit from
-    /// them.
-    pub max_pixels: Option<usize>,
-    /// Number of threads to split the work over: 1, the default, keeps it
-    /// all on the calling thread, and 0 uses one thread per core. The
-    /// output does not depend on it.
-    pub threads: usize,
-}
-
-impl Default for DecodeOptions {
-    fn default() -> Self {
-        DecodeOptions {
-            max_pixels: Some(DEFAULT_MAX_PIXELS),
-            threads: 1,
+impl Image {
+    /// The same image as the certified crate decoded it.
+    fn from_certified(image: wsq_certified::Image) -> Self {
+        Image {
+            width: image.width,
+            height: image.height,
+            ppi: image.ppi,
+            software: image.software,
+            comments: image.comments,
+            pixels: image.pixels,
         }
     }
 }
 
-impl DecodeOptions {
-    /// Sets [`max_pixels`](Self::max_pixels).
+/// Decodes a WSQ stream with the default [`DecodeOptions`], which reject
+/// images of more than [`DEFAULT_MAX_PIXELS`] pixels.
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if the data is not a valid WSQ stream (for
+/// instance [`NotWsq`](DecodeError::NotWsq), [`UnexpectedEof`](DecodeError::UnexpectedEof) or
+/// [`CorruptData`](DecodeError::CorruptData)), or [`TooLarge`](DecodeError::TooLarge) if the
+/// image has more than [`DEFAULT_MAX_PIXELS`] pixels.
+pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
+    decode_with(data, &DecodeOptions::default())
+}
+
+/// Decodes a WSQ stream.
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if the data is not a valid WSQ stream, as for [`decode`], or
+/// [`TooLarge`](DecodeError::TooLarge) if the image has more than
+/// [`max_pixels`](DecodeOptions::max_pixels) pixels.
+pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
+    wsq_certified::decode_with(data, options).map(Image::from_certified)
+}
+
+/// A decoder that keeps its working buffers from one image to the next.
+///
+/// `Decoder::default()` uses the default [`DecodeOptions`].
+///
+/// Decoding needs two buffers of 4 bytes per pixel besides the output.
+/// [`decode_with`] allocates them for every image; a `Decoder` allocates
+/// them once and keeps them, as large as the largest image so far, which
+/// spares a batch of images the cost of allocating and first touching
+/// them again. The output is the same either way. Its peak is then about
+/// 10 bytes per pixel, since the buffers stay while the quantized
+/// coefficients are read, against 8 for [`decode_with`] (see
+/// [`DecodeOptions::max_pixels`]); a refused allocation gives
+/// [`DecodeError::OutOfMemory`] as there.
+///
+/// ```
+/// # let wsq = wsq_codec::encode(&[128; 100 * 100], 100, 100, &Default::default()).unwrap();
+/// let mut decoder = wsq_codec::Decoder::new(wsq_codec::DecodeOptions::default());
+/// let mut pixels = vec![0; 100 * 100];
+/// for stream in [&wsq, &wsq] {
+///     let info = decoder.decode_into(stream, &mut pixels)?;
+///     assert_eq!((info.width, info.height), (100, 100));
+/// }
+/// # Ok::<(), wsq_codec::DecodeError>(())
+/// ```
+#[derive(Debug)]
+pub struct Decoder {
+    inner: wsq_certified::Decoder,
+}
+
+impl Default for Decoder {
+    /// A decoder using the default [`DecodeOptions`].
+    fn default() -> Self {
+        Decoder::new(DecodeOptions::default())
+    }
+}
+
+impl Decoder {
+    /// A decoder using `options` for every image.
     #[must_use]
-    pub fn with_max_pixels(mut self, max_pixels: Option<usize>) -> Self {
-        self.max_pixels = max_pixels;
-        self
+    pub fn new(options: DecodeOptions) -> Self {
+        Decoder {
+            inner: wsq_certified::Decoder::new(options),
+        }
     }
 
-    /// Sets [`threads`](Self::threads).
+    /// The options every image is decoded with.
     #[must_use]
-    pub fn with_threads(mut self, threads: usize) -> Self {
-        self.threads = threads;
-        self
+    pub fn options(&self) -> &DecodeOptions {
+        self.inner.options()
     }
+
+    /// Decodes a WSQ stream, as [`decode_with`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`DecodeError`] that [`decode_with`] gives.
+    pub fn decode(&mut self, data: &[u8]) -> Result<Image, DecodeError> {
+        self.inner.decode(data).map(Image::from_certified)
+    }
+
+    /// Decodes a WSQ stream into `out`, as [`decode_into`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`DecodeError`] that [`decode_into`] gives.
+    pub fn decode_into(&mut self, data: &[u8], out: &mut [u8]) -> Result<Info, DecodeError> {
+        self.inner.decode_into(data, out)
+    }
+}
+
+/// Reads a whole WSQ stream from `reader` and decodes it.
+///
+/// The wavelet transform needs every coefficient before it can produce a
+/// single pixel, so this reads `reader` to its end first: give it a reader
+/// that ends with the stream, for instance through [`Read::take`] when the
+/// stream sits inside a larger file, which also bounds the memory a
+/// stream from an untrusted source can claim.
+///
+/// # Errors
+///
+/// Returns [`ReadError::Io`] if reading fails, and [`ReadError::Decode`] with the
+/// [`DecodeError`] that [`decode_with`] gives if the data read cannot be decoded.
+///
+/// [`Read::take`]: std::io::Read::take
+pub fn decode_from<R: std::io::Read>(
+    mut reader: R,
+    options: &DecodeOptions,
+) -> Result<Image, ReadError> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    Ok(decode_with(&data, options)?)
+}
+
+/// Which encoder writes the stream: the one aligned with the reference
+/// implementation, or one that departs from it to meet the requested size.
+///
+/// Both write streams that any WSQ decoder reads. They differ in what they
+/// promise: see [`Conformant`](Self::Conformant) and
+/// [`Optimized`](Self::Optimized). The profile is an
+/// [`EncodeOptions`] field, so [`encode`], [`Encoder`] and [`encode_to`]
+/// all honour it.
+///
+/// ```
+/// use wsq_codec::{EncodeOptions, Profile};
+///
+/// let options = EncodeOptions::default()
+///     .with_profile(Profile::Optimized)
+///     .with_bitrate(0.75);
+/// # let _ = options;
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Profile {
+    /// The encoder aligned with the NIST reference implementation (NBIS):
+    /// the bit allocation of the specification, byte-identical output for
+    /// the same image and bit rate (see the crate documentation for the
+    /// exceptions), the same on every platform. This is the default, and
+    /// the only profile meant for FBI certification: only it may write an
+    /// implementation number in [`EncodeOptions::software`].
+    ///
+    /// The actual size lands near the requested [`bitrate`] (the
+    /// reference's allocation is approximate), not on it.
+    ///
+    /// [`bitrate`]: EncodeOptions::bitrate
+    #[default]
+    Conformant,
+    /// An encoder free to depart from the reference, never certified: it
+    /// meets the requested size.
+    ///
+    /// The stream has the conformant layout and tables; only the quantizer
+    /// bin widths differ: those of the specification's bit allocation, all
+    /// multiplied by one factor that a search chooses on the length of the
+    /// whole stream (headers, tables, comments and entropy-coded data). The
+    /// search stops on the first stream at most
+    /// [`OPTIMIZED_TOLERANCE`](Self::OPTIMIZED_TOLERANCE) below the size
+    /// [`bitrate`](EncodeOptions::bitrate) asks for (`bitrate * width *
+    /// height / 8` bytes) and never returns a longer stream while one fits;
+    /// where no stream can come that close (a target above what the image
+    /// can spend, or below what the quantization table allows), it returns
+    /// the nearest one it wrote. The output depends neither on the platform
+    /// nor on [`threads`](EncodeOptions::threads).
+    ///
+    /// The target is the one setting: a size in bytes is `bitrate` times
+    /// the pixel count over 8, so a second knob would say nothing more.
+    ///
+    /// Any WSQ decoder reads the result, but it is not what the reference
+    /// writes for the same rate, so it is never conformant: encoding with a
+    /// non-zero [`software`](EncodeOptions::software) is refused with
+    /// [`EncodeError::SoftwareRequiresConformant`]. The NISTCOM comment
+    /// records the requested rate. It costs one quantization and one
+    /// Huffman coding per stream tried, and keeps the transformed image (4
+    /// bytes per pixel) until the end.
+    Optimized,
+}
+
+impl Profile {
+    /// Share of the requested size that [`Optimized`](Self::Optimized) may
+    /// fall short by when it stops: 0.005, half a percent.
+    pub const OPTIMIZED_TOLERANCE: f64 = optimized::HIT_TOLERANCE;
 }
 
 /// Encoder settings.
@@ -190,11 +340,19 @@ pub struct EncodeOptions {
     pub comments: Vec<Vec<u8>>,
     /// Implementation number the FBI assigned to the encoder, written in
     /// the frame header. 0, the default, means unassigned.
+    ///
+    /// Only the [`Conformant`](Profile::Conformant) profile may write a
+    /// non-zero number: with [`Optimized`](Profile::Optimized) it is
+    /// refused ([`EncodeError::SoftwareRequiresConformant`]).
     pub software: u16,
     /// Number of threads to split the work over: 1, the default, keeps it
     /// all on the calling thread, and 0 uses one thread per core. The
     /// output does not depend on it.
     pub threads: usize,
+    /// Which encoder to use: [`Profile::Conformant`], the default, or
+    /// [`Profile::Optimized`], which meets the size [`bitrate`](Self::bitrate)
+    /// asks for.
+    pub profile: Profile,
 }
 
 impl Default for EncodeOptions {
@@ -205,6 +363,7 @@ impl Default for EncodeOptions {
             comments: Vec::new(),
             software: 0,
             threads: 1,
+            profile: Profile::Conformant,
         }
     }
 }
@@ -244,144 +403,51 @@ impl EncodeOptions {
         self.threads = threads;
         self
     }
-}
 
-/// Resolves a `threads` option: 0 means one thread per core.
-fn thread_count(threads: usize) -> usize {
-    match threads {
-        0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
-        n => n,
+    /// Sets [`profile`](Self::profile).
+    #[must_use]
+    pub fn with_profile(mut self, profile: Profile) -> Self {
+        self.profile = profile;
+        self
     }
 }
 
-/// Decodes a WSQ stream with the default [`DecodeOptions`], which reject
-/// images of more than [`DEFAULT_MAX_PIXELS`] pixels.
-///
-/// # Errors
-///
-/// Returns a [`DecodeError`] if the data is not a valid WSQ stream (for
-/// instance [`NotWsq`](DecodeError::NotWsq), [`UnexpectedEof`](DecodeError::UnexpectedEof) or
-/// [`CorruptData`](DecodeError::CorruptData)), or [`TooLarge`](DecodeError::TooLarge) if the
-/// image has more than [`DEFAULT_MAX_PIXELS`] pixels.
-pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
-    decode_with(data, &DecodeOptions::default())
+/// The certified encoder's settings for `options`: everything but the profile.
+fn certified_options(options: &EncodeOptions) -> wsq_certified::EncodeOptions {
+    let mut certified = wsq_certified::EncodeOptions::default()
+        .with_bitrate(options.bitrate)
+        .with_ppi(options.ppi)
+        .with_software(options.software)
+        .with_threads(options.threads);
+    for comment in &options.comments {
+        certified = certified.with_comment(comment.clone());
+    }
+    certified
 }
 
-/// Decodes a WSQ stream.
-///
-/// # Errors
-///
-/// Returns a [`DecodeError`] if the data is not a valid WSQ stream, as for [`decode`], or
-/// [`TooLarge`](DecodeError::TooLarge) if the image has more than
-/// [`max_pixels`](DecodeOptions::max_pixels) pixels.
-pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, DecodeError> {
-    decode::decode(data, options, &mut wavelet::Scratch::default())
-}
-
-/// Decodes a WSQ stream into `out`, which must hold exactly one byte per
-/// pixel (see [`read_info`] for the dimensions), and returns what the
-/// stream says about its image.
-///
-/// # Errors
-///
-/// Returns the [`DecodeError`] that [`decode_with`] gives, or
-/// [`OutputSize`](DecodeError::OutputSize) if `out` does not hold `width * height` bytes.
-pub fn decode_into(
-    data: &[u8],
-    options: &DecodeOptions,
-    out: &mut [u8],
-) -> Result<Info, DecodeError> {
-    decode::decode_into(data, options, &mut wavelet::Scratch::default(), out)
-}
-
-/// A decoder that keeps its working buffers from one image to the next.
-///
-/// Decoding needs two buffers of 4 bytes per pixel besides the output.
-/// [`decode_with`] allocates them for every image; a `Decoder` allocates
-/// them once and keeps them, as large as the largest image so far, which
-/// spares a batch of images the cost of allocating and first touching
-/// them again. The output is the same either way. Its peak is then about
-/// 10 bytes per pixel, since the buffers stay while the quantized
-/// coefficients are read, against 8 for [`decode_with`] (see
-/// [`DecodeOptions::max_pixels`]); a refused allocation gives
-/// [`DecodeError::OutOfMemory`] as there.
-///
-/// ```
-/// # let wsq = wsq_codec::encode(&[128; 100 * 100], 100, 100, &Default::default()).unwrap();
-/// let mut decoder = wsq_codec::Decoder::new(wsq_codec::DecodeOptions::default());
-/// let mut pixels = vec![0; 100 * 100];
-/// for stream in [&wsq, &wsq] {
-///     let info = decoder.decode_into(stream, &mut pixels)?;
-///     assert_eq!((info.width, info.height), (100, 100));
-/// }
-/// # Ok::<(), wsq_codec::DecodeError>(())
-/// ```
-#[derive(Debug)]
-pub struct Decoder {
-    options: DecodeOptions,
-    scratch: wavelet::Scratch,
-}
-
-impl Decoder {
-    /// A decoder using `options` for every image.
-    pub fn new(options: DecodeOptions) -> Self {
-        Decoder {
-            options,
-            scratch: wavelet::Scratch::kept(),
+/// Encodes with the profile `options` asks for: the certified encoder for
+/// [`Profile::Conformant`], the rate search of this crate on top of its
+/// analysis for [`Profile::Optimized`].
+fn encode_with(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    options: &EncodeOptions,
+    scratch: &mut Scratch,
+) -> Result<Vec<u8>, EncodeError> {
+    // Only a conformant stream may carry the FBI's implementation number.
+    if options.profile == Profile::Optimized && options.software != 0 {
+        return Err(EncodeError::SoftwareRequiresConformant(options.software));
+    }
+    let certified = certified_options(options);
+    match options.profile {
+        Profile::Conformant => {
+            wsq_certified::for_wsq_codec::encode(pixels, width, height, &certified, scratch)
+        }
+        Profile::Optimized => {
+            optimized::encode(pixels, width, height, options.bitrate, &certified, scratch)
         }
     }
-
-    /// Decodes a WSQ stream, as [`decode_with`] does.
-    ///
-    /// # Errors
-    ///
-    /// Returns the [`DecodeError`] that [`decode_with`] gives.
-    pub fn decode(&mut self, data: &[u8]) -> Result<Image, DecodeError> {
-        decode::decode(data, &self.options, &mut self.scratch)
-    }
-
-    /// Decodes a WSQ stream into `out`, as [`decode_into`] does.
-    ///
-    /// # Errors
-    ///
-    /// Returns the [`DecodeError`] that [`decode_into`] gives.
-    pub fn decode_into(&mut self, data: &[u8], out: &mut [u8]) -> Result<Info, DecodeError> {
-        decode::decode_into(data, &self.options, &mut self.scratch, out)
-    }
-}
-
-/// Reads a whole WSQ stream from `reader` and decodes it.
-///
-/// The wavelet transform needs every coefficient before it can produce a
-/// single pixel, so this reads `reader` to its end first: give it a reader
-/// that ends with the stream, for instance through [`Read::take`] when the
-/// stream sits inside a larger file, which also bounds the memory a
-/// stream from an untrusted source can claim.
-///
-/// # Errors
-///
-/// Returns [`ReadError::Io`] if reading fails, and [`ReadError::Decode`] with the
-/// [`DecodeError`] that [`decode_with`] gives if the data read cannot be decoded.
-///
-/// [`Read::take`]: std::io::Read::take
-pub fn decode_from<R: std::io::Read>(
-    mut reader: R,
-    options: &DecodeOptions,
-) -> Result<Image, ReadError> {
-    let mut data = Vec::new();
-    reader.read_to_end(&mut data)?;
-    Ok(decode_with(&data, options)?)
-}
-
-/// Reads the dimensions, resolution and comments of a WSQ stream without
-/// decoding its image.
-///
-/// # Errors
-///
-/// Returns a [`DecodeError`] if the headers are not valid, as for [`decode`]. The entropy-coded
-/// data is not read, so corruption there is not reported. The image size is not limited.
-pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
-    decode::read_info(data)
 }
 
 /// Encodes an 8-bit grayscale image, given as `width * height` pixels in
@@ -389,6 +455,11 @@ pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
 ///
 /// Both dimensions must be between 81 and 65535; smaller images leave
 /// some subbands too small to quantize.
+///
+/// The [`profile`](EncodeOptions::profile) chooses the encoder:
+/// [`Conformant`](Profile::Conformant) by default, which reproduces the
+/// reference, or [`Optimized`](Profile::Optimized), which meets the
+/// requested size.
 ///
 /// # Errors
 ///
@@ -398,21 +469,16 @@ pub fn read_info(data: &[u8]) -> Result<Info, DecodeError> {
 /// `width * height` bytes, [`InvalidBitrate`](EncodeError::InvalidBitrate) or
 /// [`BitrateTooLow`](EncodeError::BitrateTooLow) for an unusable bit rate,
 /// [`CommentTooLong`](EncodeError::CommentTooLong) for a comment that does not fit in one
-/// segment, and [`InvalidPpi`](EncodeError::InvalidPpi) if the resolution is zero.
+/// segment, [`InvalidPpi`](EncodeError::InvalidPpi) if the resolution is zero, and
+/// [`SoftwareRequiresConformant`](EncodeError::SoftwareRequiresConformant) for an implementation
+/// number with the [`Optimized`](Profile::Optimized) profile.
 pub fn encode(
     pixels: &[u8],
     width: usize,
     height: usize,
     options: &EncodeOptions,
 ) -> Result<Vec<u8>, EncodeError> {
-    encode::encode(
-        pixels,
-        width,
-        height,
-        options,
-        encode::Rate::Allocated,
-        &mut wavelet::Scratch::default(),
-    )
+    encode_with(pixels, width, height, options, &mut Scratch::default())
 }
 
 /// An encoder that keeps its working buffers from one image to the next.
@@ -433,16 +499,30 @@ pub fn encode(
 #[derive(Debug)]
 pub struct Encoder {
     options: EncodeOptions,
-    scratch: wavelet::Scratch,
+    scratch: Scratch,
+}
+
+impl Default for Encoder {
+    /// An encoder using the default [`EncodeOptions`].
+    fn default() -> Self {
+        Encoder::new(EncodeOptions::default())
+    }
 }
 
 impl Encoder {
     /// An encoder using `options` for every image.
+    #[must_use]
     pub fn new(options: EncodeOptions) -> Self {
         Encoder {
             options,
-            scratch: wavelet::Scratch::kept(),
+            scratch: Scratch::kept(),
         }
+    }
+
+    /// The options every image is encoded with.
+    #[must_use]
+    pub fn options(&self) -> &EncodeOptions {
+        &self.options
     }
 
     /// Encodes an image, as [`encode`] does.
@@ -456,14 +536,7 @@ impl Encoder {
         width: usize,
         height: usize,
     ) -> Result<Vec<u8>, EncodeError> {
-        encode::encode(
-            pixels,
-            width,
-            height,
-            &self.options,
-            encode::Rate::Allocated,
-            &mut self.scratch,
-        )
+        encode_with(pixels, width, height, &self.options, &mut self.scratch)
     }
 }
 
@@ -483,59 +556,4 @@ pub fn encode_to<W: std::io::Write>(
     writer.write_all(&encode(pixels, width, height, options)?)?;
     writer.flush()?;
     Ok(())
-}
-
-/// Experimental encoding outside the reference implementation, for
-/// measurement only.
-///
-/// Nothing here is covered by semantic versioning: it may change or go in
-/// any release. It is a prototype for issue #42, ahead of the encoding
-/// profiles of issue #44.
-#[doc(hidden)]
-pub mod experimental {
-    use crate::{EncodeError, EncodeOptions, encode, wavelet};
-
-    /// Share of the requested size [`encode_at_rate`] may fall short by
-    /// when it stops: 0.005, half a percent.
-    pub const RATE_TOLERANCE: f64 = encode::HIT_TOLERANCE;
-
-    /// Encodes an image so that the whole stream comes as close as it can
-    /// to `options.bitrate` bits per pixel without exceeding it.
-    ///
-    /// The stream has the conformant encoder's layout and tables; only the
-    /// quantizer bin widths differ: those of the specification's bit
-    /// allocation, all multiplied by one factor that a search chooses on
-    /// the length of the whole stream (headers, tables, comments and
-    /// entropy-coded data). The search stops on the first stream within
-    /// [`RATE_TOLERANCE`] below the target, or after 40 streams, and keeps
-    /// the longest stream that fits; when no factor fits, the shortest
-    /// stream it wrote. The output depends neither on the platform nor on
-    /// `options.threads`.
-    ///
-    /// Any WSQ decoder reads the result, but it is not what the reference
-    /// implementation writes for the same rate, so it is never conformant:
-    /// the frame header always carries implementation number 0, whatever
-    /// `options.software` says. The NISTCOM comment records the requested
-    /// rate. It costs one quantization and one Huffman coding per stream
-    /// tried, and keeps the transformed image (4 bytes per pixel) until the
-    /// end.
-    ///
-    /// # Errors
-    ///
-    /// Returns the [`EncodeError`] that [`encode`](crate::encode) gives.
-    pub fn encode_at_rate(
-        pixels: &[u8],
-        width: usize,
-        height: usize,
-        options: &EncodeOptions,
-    ) -> Result<Vec<u8>, EncodeError> {
-        encode::encode(
-            pixels,
-            width,
-            height,
-            options,
-            encode::Rate::Hit,
-            &mut wavelet::Scratch::default(),
-        )
-    }
 }

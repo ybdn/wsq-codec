@@ -1,0 +1,25 @@
+[package]
+name = "wsq-certified"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+description = "The certified part of wsq-codec: WSQ fingerprint decoder, conformant encoder and inspection tools, frozen and versioned with the FBI certificate"
+license = "MIT"
+repository = "https://github.com/ybdn-ei/wsq-codec"
+documentation = "https://docs.rs/wsq-certified"
+homepage = "https://github.com/ybdn-ei/wsq-codec"
+readme = "README.md"
+keywords = ["wsq", "fingerprint", "biometrics", "certification", "codec"]
+categories = ["multimedia::images", "compression"]
+include = [
+    "/src/**",
+    "/tests/**",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/rust-toolchain.toml",
+]
+
+# No dependencies, on purpose: the certified build is the compiler (see
+# rust-toolchain.toml) and this crate's own source, nothing else.
+[dependencies]

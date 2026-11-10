@@ -1,0 +1,15 @@
+date: 2026-11-10T18:54:21Z
+kernel: Linux 6.18.44-fc-v338 x86_64
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical CPUs
+memory: 16086 MiB
+rustc: rustc 1.97.0 (2d8144b78 2026-07-07)
+RUSTFLAGS: unset
+thread counts measured for wsq-codec: 1 2 4 8
+gcc: gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+nbis flags: -O2 -w -ffp-contract=off -fno-fast-math -D__NBISLE__
+nbis source: archive SHA-256 0adf8ab0f6b0e4208de50ca00ba21d3d77112ecd66288757ddfed21f6bee92c3 (matches docs/nbis-comparison.md)
+wsq-codec current: revision 8959180, working tree clean
+load average before any work (1, 5, 15 min): 6.43 5.30 4.49
+CPU over 5 s before any work: busy 99.5%, steal 1.0%
+load average at end (1, 5, 15 min): 4.14 5.45 5.40
+CPU over the timing phase: busy 88.0%, steal 0.7% (this benchmark included)

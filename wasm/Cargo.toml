@@ -1,0 +1,32 @@
+[package]
+name = "wsq-wasm"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+description = "WebAssembly bindings for wsq-codec: decode and encode WSQ fingerprint images in the browser or Node.js"
+license = "MIT"
+repository = "https://github.com/ybdn-ei/wsq-codec"
+homepage = "https://github.com/ybdn-ei/wsq-codec"
+readme = "README.md"
+keywords = ["wsq", "fingerprint", "biometrics", "wasm"]
+categories = ["wasm", "multimedia::images"]
+# Shipped on npm as `wsq-codec` (see README.md), never on crates.io.
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# The only crate of the workspace that depends on wasm-bindgen; `wsq-codec` itself stays
+# dependency-free for its users.
+[dependencies]
+wsq-codec = { version = "1.0.0", path = ".." }
+wasm-bindgen = "0.2.100"
+
+[dev-dependencies]
+js-sys = "0.3.77"
+wasm-bindgen-test = "0.3.50"
+
+[package.metadata.wasm-pack.profile.release]
+# Newer rustc emits instructions (bulk memory, sign extension, ...) that wasm-opt must be told
+# about; the browsers and Node versions that run the package support them all.
+wasm-opt = ["-O3", "--all-features"]

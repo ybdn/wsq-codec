@@ -5,13 +5,15 @@
 //! cargo bench --bench quality -- [--rates 0.5,0.75,1.0,2.25] [--runs N] [--threads N]
 //!                                [--large] [--csv FILE] [--export DIR]
 //!                                [--nbis BIN_DIR | --nbis-streams DIR] [--optimized]
+//!                                [--fingerprint-like] [--nfiq2 PATH [--nfiq2-model FILE]]
+//!                                [--mindtct PATH [--bozorth3 PATH]]
 //! ```
 //!
 //! The images are generated with integer arithmetic only (the same generator as
 //! `tests/nbis.rs`, whose images have NBIS references), so the figures do not depend on the
 //! platform. `--large` adds a 1600x1500 image. Setting `WSQ_QUALITY_DIR` to a directory of 8-bit
-//! binary PGM files (P5, at least 81x81) adds them under their file names; the directory stays
-//! outside the repository and nothing in it is ever printed beyond the figures.
+//! binary PGM files (P5, at least 81x81) adds them, reported in aggregate only (see below); the
+//! directory stays outside the repository.
 //!
 //! Every image is encoded at every rate at 500 ppi, decoded again, and compared with the
 //! original on the whole image. The figures are:
@@ -25,7 +27,7 @@
 //! Comparison with NBIS, which never links to this crate, in one of two ways:
 //!
 //! - `--nbis BIN_DIR`: `BIN_DIR` holds NBIS 5.0.0's `cwsq` and `dwsq` (build procedure in
-//!   `tests/data/README.md`). Each image is written as a raw file in a temporary directory,
+//!   `certified/tests/data/README.md`). Each image is written as a raw file in a temporary directory,
 //!   encoded by `cwsq` and decoded by `dwsq`, and the stream and the reconstruction are measured
 //!   like this crate's own.
 //! - `--nbis-streams DIR`: `DIR` holds streams NBIS wrote earlier, named `IMAGE_RATE.wsq` (for
@@ -36,23 +38,52 @@
 //! stream or in the reconstruction is reported and makes the run fail. Without `--nbis*`
 //! nothing is judged.
 //!
-//! `--optimized` also measures the experimental encoder of #42
-//! (`wsq_codec::experimental::encode_at_rate`), which scales the bin widths to hit the requested
+//! `--optimized` also measures the `Optimized` profile (`wsq_codec::Profile`, #42 and #44), which scales the bin widths to hit the requested
 //! rate, and the conformant encoder at equal size: the requested rate that makes the conformant
 //! stream closest in length to the optimized one, found by bisection. With `--nbis`, NBIS's
 //! `dwsq` decodes every optimized stream too, and a reconstruction that differs from this
 //! crate's makes the run fail.
 //!
+//! Fingerprint-specific measures (#43), which PSNR does not give: whether the decoded image
+//! still looks like a good fingerprint to NIST's quality score, and still matches the original.
+//! They come from external programs that never link to this crate, each optional:
+//!
+//! - `--nfiq2 PATH`: NIST's NFIQ 2 (`nfiq2`), on the original and the decoded image, and the
+//!   change between them (`--nfiq2-model FILE` names its `nist_plain_tir-ink.txt` model file when
+//!   it is not in the `share` directory next to the tool);
+//! - `--mindtct PATH`: NBIS 5.0.0's `mindtct`, which extracts the minutiae of both images (their
+//!   number, and its change);
+//! - `--bozorth3 PATH` (with `--mindtct`): NBIS's matcher, the score of the decoded image's
+//!   minutiae against the original's, with the original against itself as the reference.
+//!
+//! The paths can also come from `WSQ_NFIQ2`, `WSQ_NFIQ2_MODEL`, `WSQ_MINDTCT` and
+//! `WSQ_BOZORTH3`. A tool left out shows as "not run". They measure the synthetic ridge patterns
+//! of `benches/quality/synth.rs` (three images, added by `--fingerprint-like` or by any of these
+//! flags; they are not fingerprints, only patterns that have minutiae) and the images of
+//! `WSQ_QUALITY_DIR`, not the other synthetic images, on which these tools say nothing. The
+//! decoded images are those of the conformant encoder, the experimental one (`--optimized`) and
+//! the conformant encoder at equal size, at the same requested rates.
+//!
+//! Images from `WSQ_QUALITY_DIR` are never listed: no file name and no per-file row is printed or
+//! written to the CSV, only the means, minima and maxima over the directory.
+//!
 //! The table goes to the standard output; `--csv FILE` also writes every measurement as CSV.
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fmt::Write as _;
+use std::fmt::{Display, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
 use wsq_codec::{DecodeOptions, EncodeOptions};
+
+#[path = "quality/external.rs"]
+mod external;
+#[path = "quality/synth.rs"]
+mod synth;
+
+use external::{Fp, Reading, Tools};
 
 const PPI: u32 = 500;
 
@@ -95,6 +126,25 @@ struct Source {
     width: usize,
     height: usize,
     pixels: Vec<u8>,
+    /// Measured with NFIQ 2 and minutiae (a ridge pattern, or an image of the local directory).
+    fingerprint: bool,
+    /// From `WSQ_QUALITY_DIR`: reported in aggregate only, never by name.
+    corpus: bool,
+}
+
+/// The synthetic ridge patterns that have minutiae, for the fingerprint measures.
+fn ridge_patterns() -> Vec<Source> {
+    synth::images()
+        .into_iter()
+        .map(|(name, pattern)| Source {
+            name: name.to_string(),
+            width: pattern.width,
+            height: pattern.height,
+            pixels: synth::ridge_pattern(&pattern),
+            fingerprint: true,
+            corpus: false,
+        })
+        .collect()
 }
 
 fn synthetic(large: bool) -> Vec<Source> {
@@ -113,6 +163,8 @@ fn synthetic(large: bool) -> Vec<Source> {
             width,
             height,
             pixels: pattern(kind, width, height, 1),
+            fingerprint: false,
+            corpus: false,
         })
         .collect()
 }
@@ -159,14 +211,17 @@ fn local_corpus() -> Result<Vec<Source>, Box<dyn Error>> {
         .collect();
     paths.sort();
     let mut sources = Vec::new();
-    for path in paths {
-        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        let (width, height, pixels) = read_pgm(&fs::read(&path)?)?;
+    for (i, path) in paths.iter().enumerate() {
+        let (width, height, pixels) =
+            read_pgm(&fs::read(path)?).map_err(|e| format!("corpus image {}: {e}", i + 1))?;
         sources.push(Source {
-            name: stem.into_owned(),
+            // A number, not the file's name: nothing identifies a file in the output.
+            name: format!("corpus{:04}", i + 1),
             width,
             height,
             pixels,
+            fingerprint: true,
+            corpus: true,
         });
     }
     Ok(sources)
@@ -241,6 +296,8 @@ struct Measure {
     ssim: f64,
     /// Encoding and decoding time in milliseconds, for this crate's own measurements.
     times: Option<(f64, f64)>,
+    /// NFIQ 2 and minutiae of the reconstruction, when the tools ran on this source.
+    fp: Option<Fp>,
 }
 
 fn measure(src: &Source, stream_len: usize, recon: &[u8], times: Option<(f64, f64)>) -> Measure {
@@ -250,7 +307,58 @@ fn measure(src: &Source, stream_len: usize, recon: &[u8], times: Option<(f64, f6
         psnr: psnr(&src.pixels, recon),
         ssim: ssim(&src.pixels, recon, src.width, src.height),
         times,
+        fp: None,
     }
+}
+
+/// The original image as the external tools see it.
+#[derive(Clone)]
+struct FpRef {
+    reading: Reading,
+    /// `bozorth3` score of the original's minutiae against themselves.
+    self_score: Option<u32>,
+}
+
+/// Runs the tools on `pixels` (a reconstruction of `src`) and matches its minutiae against the
+/// original's.
+fn fp_measure(
+    tools: &Tools,
+    work: &Path,
+    src: &Source,
+    reference: &FpRef,
+    key: &str,
+    pixels: &[u8],
+) -> Result<Fp, Box<dyn Error>> {
+    let reading = external::read(tools, work, key, src.width, src.height, pixels, PPI)?;
+    let matched = match (
+        &tools.bozorth3,
+        &reading.template,
+        &reference.reading.template,
+    ) {
+        (Some(bin), Some(probe), Some(gallery)) => Some(external::bozorth3(bin, probe, gallery)?),
+        _ => None,
+    };
+    Ok(Fp { reading, matched })
+}
+
+fn fp_reference(tools: &Tools, work: &Path, src: &Source) -> Result<FpRef, Box<dyn Error>> {
+    let reading = external::read(
+        tools,
+        work,
+        "original",
+        src.width,
+        src.height,
+        &src.pixels,
+        PPI,
+    )?;
+    let self_score = match (&tools.bozorth3, &reading.template) {
+        (Some(bin), Some(t)) => Some(external::bozorth3(bin, t, t)?),
+        _ => None,
+    };
+    Ok(FpRef {
+        reading,
+        self_score,
+    })
 }
 
 struct Nbis {
@@ -259,7 +367,7 @@ struct Nbis {
     same_pixels: bool,
 }
 
-/// The experimental encoder against the conformant one at equal size.
+/// The `Optimized` profile against the conformant encoder at equal size.
 struct Optimized {
     measure: Measure,
     /// Requested rate that gives the conformant stream closest in length.
@@ -275,6 +383,10 @@ struct Row {
     height: usize,
     rate: String,
     target: f64,
+    corpus: bool,
+    /// Whether the fingerprint measures apply to this image.
+    fingerprint: bool,
+    reference: Option<FpRef>,
     ours: Measure,
     nbis: Option<Nbis>,
     optimized: Option<Optimized>,
@@ -297,9 +409,17 @@ struct Args {
     export: Option<PathBuf>,
     mode: Mode,
     optimized: bool,
+    /// Add the synthetic ridge patterns, for the fingerprint measures.
+    fingerprint_like: bool,
+    tools: Tools,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, Box<dyn Error>> {
+    let from_env = |name: &str| {
+        env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     let mut out = Args {
         rates: ["0.5", "0.75", "1.0", "2.25"].map(String::from).to_vec(),
         runs: 3,
@@ -309,6 +429,13 @@ fn parse_args(args: &[String]) -> Result<Args, Box<dyn Error>> {
         export: None,
         mode: Mode::None,
         optimized: false,
+        fingerprint_like: false,
+        tools: Tools {
+            nfiq2: from_env("WSQ_NFIQ2"),
+            nfiq2_model: from_env("WSQ_NFIQ2_MODEL"),
+            mindtct: from_env("WSQ_MINDTCT"),
+            bozorth3: from_env("WSQ_BOZORTH3"),
+        },
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -320,6 +447,11 @@ fn parse_args(args: &[String]) -> Result<Args, Box<dyn Error>> {
             "--bench" => {} // added by cargo
             "--large" => out.large = true,
             "--optimized" => out.optimized = true,
+            "--fingerprint-like" => out.fingerprint_like = true,
+            "--nfiq2" => out.tools.nfiq2 = Some(value("--nfiq2")?.into()),
+            "--nfiq2-model" => out.tools.nfiq2_model = Some(value("--nfiq2-model")?.into()),
+            "--mindtct" => out.tools.mindtct = Some(value("--mindtct")?.into()),
+            "--bozorth3" => out.tools.bozorth3 = Some(value("--bozorth3")?.into()),
             "--rates" => {
                 out.rates = value("--rates")?.split(',').map(String::from).collect();
             }
@@ -334,6 +466,9 @@ fn parse_args(args: &[String]) -> Result<Args, Box<dyn Error>> {
     }
     if out.runs == 0 {
         return Err("--runs must be at least 1".into());
+    }
+    if out.tools.bozorth3.is_some() && out.tools.mindtct.is_none() {
+        return Err("--bozorth3 needs --mindtct: it matches the minutiae mindtct extracts".into());
     }
     for rate in &out.rates {
         let r: f32 = rate.parse().map_err(|_| format!("bad rate {rate}"))?;
@@ -460,11 +595,38 @@ fn fmt_psnr(v: f64) -> String {
     }
 }
 
-fn csv_line(row: &Row, source: &str, m: &Measure, identical: Option<bool>) -> String {
+fn csv_line(
+    row: &Row,
+    source: &str,
+    m: &Measure,
+    identical: Option<bool>,
+    requested: Option<f32>,
+) -> String {
     let ms = |t: Option<f64>| t.map_or(String::new(), |t| format!("{t:.1}"));
     let times = m.times;
+    let cell = |v: Option<String>| v.unwrap_or_default();
+    // The original's figures go with the reconstruction's, on the rows that have one.
+    let fp = m.fp.as_ref();
+    let reference = row.reference.as_ref().filter(|_| fp.is_some());
+    let fingerprint = format!(
+        "{},{},{},{},{},{}",
+        cell(
+            reference
+                .and_then(|r| r.reading.nfiq2)
+                .map(|v| v.to_string())
+        ),
+        cell(fp.and_then(|f| f.reading.nfiq2).map(|v| v.to_string())),
+        cell(
+            reference
+                .and_then(|r| r.reading.minutiae)
+                .map(|v| v.to_string())
+        ),
+        cell(fp.and_then(|f| f.reading.minutiae).map(|v| v.to_string())),
+        cell(fp.and_then(|f| f.matched).map(|v| v.to_string())),
+        cell(reference.and_then(|r| r.self_score).map(|v| v.to_string())),
+    );
     format!(
-        "{source},{},{},{},{},{},{},{:.4},{},{:.4},{},{},{}",
+        "{source},{},{},{},{},{},{},{:.4},{},{:.4},{},{},{},{fingerprint},{}",
         row.image,
         row.width,
         row.height,
@@ -477,12 +639,16 @@ fn csv_line(row: &Row, source: &str, m: &Measure, identical: Option<bool>) -> St
         ms(times.map(|t| t.0)),
         ms(times.map(|t| t.1)),
         identical.map_or(String::new(), |i| i.to_string()),
+        requested.map_or(String::new(), |r| r.to_string()),
     )
 }
 
 fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let args = parse_args(args)?;
     let mut sources = synthetic(args.large);
+    if args.fingerprint_like || args.tools.any() {
+        sources.extend(ridge_patterns());
+    }
     sources.extend(local_corpus()?);
     if let Some(dir) = &args.export {
         fs::create_dir_all(dir)?;
@@ -490,7 +656,8 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             fs::write(dir.join(format!("{}.pgm", src.name)), pgm(src))?;
         }
     }
-    let work = env::temp_dir().join(format!("wsq-quality-{}", process::id()));
+    let work = private_work_dir()?;
+    let fp_work = work.join("fingerprint");
     let encode_options = |rate: f32| {
         EncodeOptions::default()
             .with_bitrate(rate)
@@ -502,9 +669,27 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut rows = Vec::new();
     let result = (|| -> Result<(), Box<dyn Error>> {
         for src in &sources {
+            let measured = src.fingerprint && args.tools.any();
+            let reference = if measured {
+                Some(fp_reference(&args.tools, &fp_work.join(&src.name), src)?)
+            } else {
+                None
+            };
+            // Runs the tools on a reconstruction of this source, keyed by rate and encoder.
+            let fp_of =
+                |rate: &str, encoder: &str, pixels: &[u8]| -> Result<Option<Fp>, Box<dyn Error>> {
+                    let Some(reference) = &reference else {
+                        return Ok(None);
+                    };
+                    let key = format!("{}_{encoder}", rate.replace('.', "p"));
+                    let work = fp_work.join(&src.name);
+                    let fp = fp_measure(&args.tools, &work, src, reference, &key, pixels)?;
+                    Ok(Some(fp))
+                };
             for rate in &args.rates {
                 let target: f32 = rate.parse()?;
                 let options = encode_options(target);
+                let optimized_options = options.clone().with_profile(wsq_codec::Profile::Optimized);
                 let (enc, wsq) = fastest(args.runs, || {
                     wsq_codec::encode(&src.pixels, src.width, src.height, &options)
                 });
@@ -516,7 +701,8 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                     return Err(format!("{}: decoded size differs", src.name).into());
                 }
                 let times = Some((enc.as_secs_f64() * 1e3, dec.as_secs_f64() * 1e3));
-                let ours = measure(src, wsq.len(), &image.pixels, times);
+                let mut ours = measure(src, wsq.len(), &image.pixels, times);
+                ours.fp = fp_of(rate, "conformant", &image.pixels)?;
 
                 let nbis = match &args.mode {
                     Mode::None => None,
@@ -537,21 +723,19 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                 });
                 let optimized = if args.optimized {
                     let (enc, wsq) = fastest(args.runs, || {
-                        wsq_codec::experimental::encode_at_rate(
-                            &src.pixels,
-                            src.width,
-                            src.height,
-                            &options,
-                        )
+                        wsq_codec::encode(&src.pixels, src.width, src.height, &optimized_options)
                     });
                     let wsq = wsq?;
                     let (dec, image) =
                         fastest(args.runs, || wsq_codec::decode_with(&wsq, &decode_options));
                     let image = image?;
                     let times = Some((enc.as_secs_f64() * 1e3, dec.as_secs_f64() * 1e3));
-                    let opt = measure(src, wsq.len(), &image.pixels, times);
+                    let mut opt = measure(src, wsq.len(), &image.pixels, times);
+                    opt.fp = fp_of(rate, "optimized", &image.pixels)?;
                     let (equal_rate, equal_wsq) = equal_size(src, wsq.len(), encode_options)?;
                     let equal_pixels = wsq_codec::decode_with(&equal_wsq, &decode_options)?.pixels;
+                    let mut equal = measure(src, equal_wsq.len(), &equal_pixels, None);
+                    equal.fp = fp_of(rate, "equal", &equal_pixels)?;
                     let nbis_pixels = match &args.mode {
                         Mode::Run(bin) => Some(
                             nbis_decode(bin, &work, &format!("{}_{rate}", src.name), &wsq)?
@@ -562,7 +746,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                     Some(Optimized {
                         measure: opt,
                         equal_rate,
-                        equal: measure(src, equal_wsq.len(), &equal_pixels, None),
+                        equal,
                         nbis_pixels,
                     })
                 } else {
@@ -574,6 +758,9 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                     height: src.height,
                     rate: rate.clone(),
                     target: f64::from(target),
+                    corpus: src.corpus,
+                    fingerprint: src.fingerprint,
+                    reference: reference.clone(),
                     ours,
                     nbis,
                     optimized,
@@ -587,20 +774,27 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
 
     print_tables(&rows, &args);
     print_optimized(&rows);
+    print_fingerprint(&rows, &args);
     if let Some(path) = &args.csv {
         let mut csv = String::from(
-            "source,image,width,height,rate,target_bpp,bytes,bpp,psnr_db,ssim,encode_ms,decode_ms,identical_to_crate,requested_bpp\n",
+            "source,image,width,height,rate,target_bpp,bytes,bpp,psnr_db,ssim,encode_ms,decode_ms,identical_to_crate,nfiq2_original,nfiq2_decoded,minutiae_original,minutiae_decoded,bozorth3_match,bozorth3_self,requested_bpp\n",
         );
-        for row in &rows {
-            writeln!(csv, "{}", csv_line(row, "wsq-codec", &row.ours, None))?;
+        // Images of the local directory are not listed, even here.
+        for row in rows.iter().filter(|r| !r.corpus) {
+            writeln!(csv, "{}", csv_line(row, "wsq-codec", &row.ours, None, None))?;
             if let Some(o) = &row.optimized {
                 writeln!(
                     csv,
                     "{}",
-                    csv_line(row, "wsq-codec-optimized", &o.measure, o.nbis_pixels)
+                    csv_line(row, "wsq-codec-optimized", &o.measure, o.nbis_pixels, None)
                 )?;
-                let mut equal = csv_line(row, "wsq-codec-equal-size", &o.equal, None);
-                write!(equal, ",{}", o.equal_rate)?;
+                let equal = csv_line(
+                    row,
+                    "wsq-codec-equal-size",
+                    &o.equal,
+                    None,
+                    Some(o.equal_rate),
+                );
                 writeln!(csv, "{equal}")?;
             }
             if let Some(n) = &row.nbis {
@@ -611,7 +805,8 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                         row,
                         "nbis",
                         &n.measure,
-                        Some(n.same_stream && n.same_pixels)
+                        Some(n.same_stream && n.same_pixels),
+                        None
                     )
                 )?;
             }
@@ -643,6 +838,15 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// How a group of images is called in the aggregate tables.
+fn set_name(corpus: bool) -> &'static str {
+    if corpus {
+        "local directory"
+    } else {
+        "synthetic"
+    }
+}
+
 fn print_tables(rows: &[Row], args: &Args) {
     let compare = !matches!(args.mode, Mode::None);
     println!(
@@ -660,7 +864,7 @@ fn print_tables(rows: &[Row], args: &Args) {
     );
     print!("|---|---|---|---|---|---|---|---|");
     println!("{}", if compare { "---|---|---|---|---|" } else { "" });
-    for r in rows {
+    for r in rows.iter().filter(|r| !r.corpus) {
         let (e, d) = r.ours.times.unwrap_or_default();
         print!(
             "| {}, {}×{} | {} | {} | {:.4} | {} | {:.4} | {e:.1} | {d:.1} |",
@@ -688,16 +892,19 @@ fn print_tables(rows: &[Row], args: &Args) {
     }
 
     // Per requested rate, over the images that have a finite PSNR.
-    let mut by_rate: BTreeMap<u32, Vec<&Row>> = BTreeMap::new();
+    let mut by_rate: BTreeMap<(bool, u32), Vec<&Row>> = BTreeMap::new();
     for r in rows {
-        by_rate.entry((r.target * 1e4) as u32).or_default().push(r);
+        by_rate
+            .entry((r.corpus, (r.target * 1e4) as u32))
+            .or_default()
+            .push(r);
     }
     println!("\nPer requested rate, mean over the images:\n");
     println!(
-        "| target bpp | images | mean actual bpp | mean deviation | mean PSNR dB | mean SSIM |"
+        "| set | target bpp | images | mean actual bpp | mean deviation | mean PSNR dB | mean SSIM |"
     );
-    println!("|---|---|---|---|---|---|");
-    for group in by_rate.values() {
+    println!("|---|---|---|---|---|---|---|");
+    for (&(corpus, _), group) in &by_rate {
         let n = group.len() as f64;
         let target = group[0].target;
         let bpp = group.iter().map(|r| r.ours.bpp).sum::<f64>() / n;
@@ -715,7 +922,8 @@ fn print_tables(rows: &[Row], args: &Args) {
         let mean_psnr = finite.iter().sum::<f64>() / finite.len().max(1) as f64;
         let mean_ssim = group.iter().map(|r| r.ours.ssim).sum::<f64>() / n;
         println!(
-            "| {target} | {} | {bpp:.4} | {dev:+.1}% | {mean_psnr:.2} | {mean_ssim:.4} |",
+            "| {} | {target} | {} | {bpp:.4} | {dev:+.1}% | {mean_psnr:.2} | {mean_ssim:.4} |",
+            set_name(corpus),
             group.len()
         );
     }
@@ -741,7 +949,7 @@ fn print_optimized(rows: &[Row]) {
     println!("{}", if nbis { " NBIS dwsq |" } else { "" });
     print!("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     println!("{}", if nbis { "---|" } else { "" });
-    for (r, o) in &rows {
+    for (r, o) in rows.iter().filter(|(r, _)| !r.corpus) {
         let m = &o.measure;
         print!(
             "| {}, {}×{} | {} | {} | {:.4} | {:+.2}% | {} | {:.4} | {:.1} | {:.4} | {} | {} | {:.4} | {:+.2} |",
@@ -767,20 +975,20 @@ fn print_optimized(rows: &[Row]) {
         println!();
     }
 
-    let mut by_rate: BTreeMap<u32, Vec<(&Row, &Optimized)>> = BTreeMap::new();
+    let mut by_rate: BTreeMap<(bool, u32), Vec<(&Row, &Optimized)>> = BTreeMap::new();
     for &(r, o) in &rows {
         by_rate
-            .entry((r.target * 1e4) as u32)
+            .entry((r.corpus, (r.target * 1e4) as u32))
             .or_default()
             .push((r, o));
     }
     println!("\nPer requested rate, over the images:\n");
     println!(
-        "| target bpp | images | mean actual bpp | deviation, min / max | mean PSNR dB | \
+        "| set | target bpp | images | mean actual bpp | deviation, min / max | mean PSNR dB | \
          mean PSNR diff at equal size dB | mean SSIM diff | encode time / conformant |"
     );
-    println!("|---|---|---|---|---|---|---|---|");
-    for group in by_rate.values() {
+    println!("|---|---|---|---|---|---|---|---|---|");
+    for (&(corpus, _), group) in &by_rate {
         let n = group.len() as f64;
         let target = group[0].0.target;
         let mean = |f: &dyn Fn(&Row, &Optimized) -> f64| {
@@ -794,7 +1002,8 @@ fn print_optimized(rows: &[Row]) {
         let max = devs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let time = |m: &Measure| m.times.unwrap_or_default().0;
         println!(
-            "| {target} | {} | {:.4} | {min:+.2}% / {max:+.2}% | {:.2} | {:+.3} | {:+.4} | {:.2} |",
+            "| {} | {target} | {} | {:.4} | {min:+.2}% / {max:+.2}% | {:.2} | {:+.3} | {:+.4} | {:.2} |",
+            set_name(corpus),
             group.len(),
             mean(&|_, o| o.measure.bpp),
             mean(&|_, o| o.measure.psnr),
@@ -806,10 +1015,205 @@ fn print_optimized(rows: &[Row]) {
     }
 }
 
+/// A table cell for a figure of an external tool: "not run" when the tool was not given, "n/a"
+/// when it ran and gave nothing for this image.
+fn cell<T: Display>(ran: bool, value: Option<T>) -> String {
+    if !ran {
+        "not run".into()
+    } else {
+        value.map_or("n/a".into(), |v| v.to_string())
+    }
+}
+
+/// The reconstructions of one row that the fingerprint measures cover, by encoder.
+fn encoders(row: &Row) -> Vec<(&'static str, &Measure)> {
+    let mut out = vec![("conformant", &row.ours)];
+    if let Some(o) = &row.optimized {
+        out.push(("optimized", &o.measure));
+        out.push(("conformant, equal size", &o.equal));
+    }
+    out
+}
+
+/// Figures of one reconstruction, from the original's reading and its own.
+struct Figures {
+    nfiq2: Option<u32>,
+    nfiq2_original: Option<u32>,
+    minutiae: Option<usize>,
+    minutiae_original: Option<usize>,
+    matched: Option<u32>,
+    self_score: Option<u32>,
+}
+
+impl Figures {
+    fn of(row: &Row, m: &Measure) -> Figures {
+        let reference = row.reference.as_ref();
+        let fp = m.fp.as_ref();
+        Figures {
+            nfiq2: fp.and_then(|f| f.reading.nfiq2),
+            nfiq2_original: reference.and_then(|r| r.reading.nfiq2),
+            minutiae: fp.and_then(|f| f.reading.minutiae),
+            minutiae_original: reference.and_then(|r| r.reading.minutiae),
+            matched: fp.and_then(|f| f.matched),
+            self_score: reference.and_then(|r| r.self_score),
+        }
+    }
+
+    fn nfiq2_change(&self) -> Option<f64> {
+        Some(f64::from(self.nfiq2?) - f64::from(self.nfiq2_original?))
+    }
+
+    fn minutiae_change(&self) -> Option<f64> {
+        Some(self.minutiae? as f64 - self.minutiae_original? as f64)
+    }
+
+    /// Match score over the original's score against itself, in per cent.
+    fn match_ratio(&self) -> Option<f64> {
+        let (m, s) = (self.matched?, self.self_score?);
+        (s > 0).then(|| f64::from(m) / f64::from(s) * 100.0)
+    }
+}
+
+/// Mean and minimum of the figures that exist.
+fn mean_min(values: impl Iterator<Item = Option<f64>>) -> Option<(f64, f64)> {
+    let v: Vec<f64> = values.flatten().collect();
+    (!v.is_empty()).then(|| {
+        (
+            v.iter().sum::<f64>() / v.len() as f64,
+            v.iter().copied().fold(f64::INFINITY, f64::min),
+        )
+    })
+}
+
+fn print_fingerprint(rows: &[Row], args: &Args) {
+    let rows: Vec<&Row> = rows.iter().filter(|r| r.fingerprint).collect();
+    if rows.is_empty() {
+        return;
+    }
+    let tools = &args.tools;
+    let (nfiq2, minutiae, matcher) = (
+        tools.nfiq2.is_some(),
+        tools.mindtct.is_some(),
+        tools.bozorth3.is_some(),
+    );
+    println!(
+        "\nFingerprint measures (#43): NFIQ 2 (0 to 100, higher is better), minutiae of NBIS's \
+         `mindtct`, and the `bozorth3` score of the reconstruction's minutiae against the \
+         original's (the original against itself is the reference). Synthetic ridge patterns \
+         are not fingerprints. A tool that was not given shows as \"not run\", one that gave \
+         nothing for an image as \"n/a\".\n"
+    );
+    println!(
+        "| image | requested bpp | encoder | bytes | NFIQ 2 original | NFIQ 2 decoded | change | \
+         minutiae original | minutiae decoded | change | bozorth3 match | bozorth3 self | \
+         match / self |"
+    );
+    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    let signed = |ran: bool, v: Option<f64>| cell(ran, v.map(|v| format!("{v:+.0}")));
+    for r in rows.iter().filter(|r| !r.corpus) {
+        for (name, m) in encoders(r) {
+            let f = Figures::of(r, m);
+            println!(
+                "| {} | {} | {name} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                r.image,
+                r.rate,
+                m.bytes,
+                cell(nfiq2, f.nfiq2_original),
+                cell(nfiq2, f.nfiq2),
+                signed(nfiq2, f.nfiq2_change()),
+                cell(minutiae, f.minutiae_original),
+                cell(minutiae, f.minutiae),
+                signed(minutiae, f.minutiae_change()),
+                cell(matcher, f.matched),
+                cell(matcher, f.self_score),
+                cell(matcher, f.match_ratio().map(|v| format!("{v:.0}%"))),
+            );
+        }
+    }
+
+    // Aggregates, which are all there is for the local directory.
+    let mut groups: BTreeMap<(bool, u32, usize), Vec<Figures>> = BTreeMap::new();
+    let mut names = Vec::new();
+    for r in &rows {
+        for (i, (name, m)) in encoders(r).into_iter().enumerate() {
+            if !names.contains(&(i, name)) {
+                names.push((i, name));
+            }
+            groups
+                .entry((r.corpus, (r.target * 1e4) as u32, i))
+                .or_default()
+                .push(Figures::of(r, m));
+        }
+    }
+    println!(
+        "\nPer requested rate and encoder, over the images (means; \"worst\" is the minimum):\n"
+    );
+    println!(
+        "| set | requested bpp | encoder | images | NFIQ 2 original | NFIQ 2 decoded | \
+         change, mean / worst | minutiae change, mean | bozorth3 match | bozorth3 self | \
+         match / self, mean / worst |"
+    );
+    println!("|---|---|---|---|---|---|---|---|---|---|---|");
+    let pair = |ran: bool, v: Option<(f64, f64)>, precision: usize| {
+        cell(
+            ran,
+            v.map(|(mean, min)| format!("{mean:+.precision$} / {min:+.precision$}")),
+        )
+    };
+    let plain =
+        |ran: bool, v: Option<(f64, f64)>| cell(ran, v.map(|(mean, _)| format!("{mean:.1}")));
+    let mut missing = 0;
+    for (&(corpus, rate, encoder), group) in &groups {
+        let name = names
+            .iter()
+            .find(|(i, _)| *i == encoder)
+            .map_or("", |n| n.1);
+        let target = f64::from(rate) / 1e4;
+        let col = |f: fn(&Figures) -> Option<f64>| mean_min(group.iter().map(f));
+        let ratio = col(Figures::match_ratio);
+        println!(
+            "| {} | {target} | {name} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            set_name(corpus),
+            group.len(),
+            plain(nfiq2, col(|f| f.nfiq2_original.map(f64::from))),
+            plain(nfiq2, col(|f| f.nfiq2.map(f64::from))),
+            pair(nfiq2, col(Figures::nfiq2_change), 1),
+            plain(minutiae, col(Figures::minutiae_change)),
+            plain(matcher, col(|f| f.matched.map(f64::from))),
+            plain(matcher, col(|f| f.self_score.map(f64::from))),
+            cell(
+                matcher,
+                ratio.map(|(mean, min)| format!("{mean:.0}% / {min:.0}%"))
+            ),
+        );
+        missing += group
+            .iter()
+            .filter(|f| nfiq2 && (f.nfiq2.is_none() || f.nfiq2_original.is_none()))
+            .count();
+    }
+    if missing > 0 {
+        println!("\nNFIQ 2 gave no score for {missing} reconstruction(s) or original(s) above.");
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if let Err(e) = run(&args) {
         eprintln!("quality: {e}");
         process::exit(1);
     }
+}
+
+/// The work directory for the images handed to NBIS and the external tools, which may be real
+/// fingerprints (`WSQ_QUALITY_DIR`): created afresh (an existing path is an error, so nothing
+/// prepared by someone else is reused) and, on Unix, readable by its owner only.
+fn private_work_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let work = env::temp_dir().join(format!("wsq-quality-{}", process::id()));
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&work).map_err(|e| {
+        format!("cannot create a private work directory in the temporary directory: {e}")
+    })?;
+    Ok(work)
 }

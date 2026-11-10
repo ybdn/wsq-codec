@@ -1,0 +1,29 @@
+[package]
+name = "wsq-capi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "C API for wsq-codec: libwsq (static and shared library) and wsq.h"
+license = "MIT"
+repository = "https://github.com/ybdn-ei/wsq-codec"
+homepage = "https://github.com/ybdn-ei/wsq-codec"
+readme = "README.md"
+# Shipped as prebuilt libraries on the GitHub releases, not on crates.io: a C program cannot
+# use a crate, and the header is generated, so a source package would add nothing.
+publish = false
+
+[lib]
+# libwsq.a / libwsq.so / libwsq.dylib / wsq.dll (+ wsq.lib, wsq.dll.lib on MSVC). `rlib` is
+# for `cargo test` and clippy only; C needs none of it. No rustdoc: its output directory would
+# clash with the `wsq` binary of wsq-cli, and the interface is documented in include/wsq.h.
+name = "wsq"
+crate-type = ["staticlib", "cdylib", "rlib"]
+doc = false
+
+[dependencies]
+wsq-codec = { version = "1.0.0", path = ".." }
+
+# Compiles and runs tests/roundtrip.c on every platform: the `cc` crate finds the C compiler
+# (MSVC's cl included) without a separate setup step.
+[dev-dependencies]
+cc = "1"

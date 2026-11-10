@@ -1,8 +1,15 @@
 name: Release
 
-# Publishes to crates.io through Trusted Publishing (OIDC, no stored token) when a `v*` tag
-# is pushed on `main`. A manual run does every check and `cargo publish --dry-run`, and
-# never publishes: publishing is irreversible and only a tag on main may do it.
+# Publishes to crates.io, to npm (the WebAssembly package `wsq-codec`, wasm/, with provenance)
+# and to PyPI (the `wsq-codec` Python package, python/), all through Trusted Publishing (OIDC),
+# when a `v*` tag is pushed on `main`, and attaches the C library (capi/) to the GitHub release.
+# A manual run does every check, `cargo publish --dry-run`, `npm publish --dry-run`, builds the
+# wheels and the source distribution, and never publishes: publishing is irreversible and only a
+# tag on main may do it.
+#
+# Two crates are published: `wsq-certified` first (only when its version, in certified/Cargo.toml,
+# is not on crates.io yet: it changes with a certification, not with every release), then
+# `wsq-codec`, which depends on it at that exact version. The tag is the version of `wsq-codec`.
 
 on:
   push:
@@ -22,6 +29,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
+      certified: ${{ steps.certified.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,6 +42,12 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # The Python package (python/Cargo.toml, which maturin reads) has the crate's version.
+          py_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' python/Cargo.toml | head -n 1)
+          if [ "$py_version" != "$version" ]; then
+            echo "::error::python/Cargo.toml has version $py_version, Cargo.toml has $version"
+            exit 1
+          fi
           if [ "$REF_TYPE" = tag ]; then
             if [ "$REF_NAME" != "v$version" ]; then
               echo "::error::tag $REF_NAME does not match version $version in Cargo.toml"
@@ -52,6 +66,16 @@ jobs:
             echo "::error::CHANGELOG.md has no '## $version' section"
             exit 1
           fi
+      - id: certified
+        run: |
+          certified=$(sed -n 's/^version = "\(.*\)"$/\1/p' certified/Cargo.toml | head -n 1)
+          echo "version=$certified" >> "$GITHUB_OUTPUT"
+          for manifest in Cargo.toml cli/Cargo.toml; do
+            if ! grep -q "^wsq-certified = { version = \"=$certified\"" "$manifest"; then
+              echo "::error::$manifest does not depend on wsq-certified =$certified"
+              exit 1
+            fi
+          done
 
   ci:
     name: checks
@@ -75,16 +99,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
+      # Both crates, in dependency order. The packages are verified against each other, so this
+      # works before wsq-certified is on crates.io (cargo 1.90 and later).
       - name: Dry run
         if: github.event_name != 'push'
-        run: cargo publish --dry-run
+        run: cargo publish --dry-run -p wsq-certified -p wsq-codec
       - name: Authenticate to crates.io
         if: github.event_name == 'push'
         id: auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
-      - name: Publish
+      # wsq-certified first: wsq-codec cannot be published before the exact version it depends on.
+      # Skipped when this version is already out, which is the usual case: the certified crate
+      # changes with a certification, not with every release of wsq-codec.
+      - name: Publish wsq-certified
         if: github.event_name == 'push'
-        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CERTIFIED: ${{ needs.verify.outputs.certified }}
+        run: |
+          if curl -sf https://index.crates.io/ws/q-/wsq-certified | grep -q "\"vers\":\"$CERTIFIED\""; then
+            echo "wsq-certified $CERTIFIED is already on crates.io"
+          else
+            cargo publish -p wsq-certified
+          fi
+      # cargo waits for the index to list wsq-certified before it verifies and uploads wsq-codec.
+      - name: Publish wsq-codec
+        if: github.event_name == 'push'
+        run: cargo publish -p wsq-codec
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
       - name: GitHub release
@@ -96,3 +137,218 @@ jobs:
         run: |
           awk -v v="## $VERSION" '$0 == v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
           gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
+
+  # The npm package of the `wasm/` crate. npm Trusted Publishing (OIDC) authenticates it once the
+  # maintainer has configured the trusted publisher on npmjs.com (CONTRIBUTING.md); the very first
+  # publish, before the package exists there, needs the `NPM_TOKEN` secret instead.
+  npm:
+    name: publish to npm
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write # npm Trusted Publishing and the provenance attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - name: Check that the package has the release's version
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          wasm_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' wasm/Cargo.toml | head -n 1)
+          if [ "$wasm_version" != "$VERSION" ]; then
+            echo "::error::wasm/Cargo.toml has version $wasm_version, Cargo.toml has $VERSION"
+            exit 1
+          fi
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.15.1 --locked
+      # Trusted Publishing needs npm 11.5.1 or later; the runner's Node.js may bring an older one.
+      - name: Install a recent npm
+        run: npm install --global npm@11.21.2
+      - name: Record the tools
+        run: |
+          node --version
+          npm --version
+          wasm-pack --version
+      - name: Build the package
+        run: wasm/build.sh
+      - name: Load the package in Node.js
+        run: node wasm/scripts/check-package.mjs wasm/pkg wasm/demo/sample.wsq
+      - name: Dry run
+        if: github.event_name != 'push'
+        working-directory: wasm/pkg
+        run: npm publish --dry-run --access public
+      - name: Use the stored token (first publish only)
+        if: github.event_name == 'push'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "::notice::publishing with the NPM_TOKEN secret; remove it once Trusted Publishing is set up"
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" >> "$HOME/.npmrc"
+          fi
+      - name: Publish
+        if: github.event_name == 'push'
+        working-directory: wasm/pkg
+        run: npm publish --provenance --access public
+
+  # The C library (#50), attached to the GitHub release that `publish` created: the header, the
+  # static and shared libraries and the licence, one archive per platform. A manual run builds
+  # and packages without uploading anything (there is no release to attach to). Only this job
+  # writes to the release: `publish` has the other write permission, for crates.io.
+  capi:
+    name: C library (${{ matrix.target }})
+    needs: [verify, publish]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: write # attach the archives to the GitHub release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            libs: libwsq.a libwsq.so
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            libs: libwsq.a libwsq.so
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            libs: libwsq.a libwsq.dylib
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            libs: wsq.lib wsq.dll wsq.dll.lib
+            archive: zip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - run: cargo build --release -p wsq-capi
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+          LIBS: ${{ matrix.libs }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          name="wsq-capi-$TAG-$TARGET"
+          mkdir -p "$name/include" "$name/lib"
+          cp capi/include/wsq.h "$name/include/"
+          for lib in $LIBS; do cp "target/release/$lib" "$name/lib/"; done
+          cp LICENSE "$name/LICENSE"
+          cp capi/README.md "$name/README.md"
+          if [ "$ARCHIVE" = zip ]; then
+            7z a -tzip "$name.zip" "$name"
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          echo "file=$name.$ARCHIVE" >> "$GITHUB_OUTPUT"
+          ls -l "$name" "$name/lib"
+      - name: Attach to the GitHub release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          FILE: ${{ steps.package.outputs.file }}
+        run: gh release upload "$TAG" "$FILE" --clobber
+
+  # The wheels are abi3: one per platform serves every CPython from 3.9. Linux wheels are built
+  # by maturin-action in a manylinux container.
+  wheels:
+    name: wheel (${{ matrix.name }})
+    needs: [verify, ci]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest, target: x86_64 }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, target: aarch64 }
+          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
+          - { name: macos-x86_64, os: macos-latest, target: x86_64-apple-darwin }
+          - { name: windows-x64, os: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wheels-${{ matrix.name }}
+          path: python/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: source distribution
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sdist
+          path: python/dist/*.tar.gz
+          if-no-files-found: error
+
+  dist-check:
+    name: check the distributions
+    needs: [verify, wheels, sdist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "{wheels-*,sdist}"
+          merge-multiple: true
+          path: dist
+      - run: ls -l dist
+      - run: pipx run twine check --strict dist/*
+
+  # `pypi` is a GitHub environment (the Trusted Publisher on PyPI names it): see
+  # CONTRIBUTING.md for the one-time setup. Only a tag publishes; a manual run stops after
+  # `dist-check`.
+  pypi:
+    name: publish to PyPI
+    if: github.event_name == 'push'
+    needs: [verify, dist-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/wsq-codec/
+    permissions:
+      id-token: write # Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "{wheels-*,sdist}"
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist

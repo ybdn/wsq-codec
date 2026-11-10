@@ -20,7 +20,7 @@ date below and the conditions of measurement. They are measurements, not a verdi
   C2 = (0.03 * 255)^2. It is not the Gaussian-window SSIM of the literature: compare it with
   other runs of this tool only.
 - NBIS: `cwsq` and `dwsq` of NBIS 5.0.0 (`--nbis BIN_DIR`), built with
-  `-ffp-contract=off -fno-fast-math` (`tests/data/README.md`). `cwsq` encodes the raw image
+  `-ffp-contract=off -fno-fast-math` (`certified/tests/data/README.md`). `cwsq` encodes the raw image
   with the same bit rate and 500 ppi, `dwsq` decodes its stream, and both are measured as
   this crate's are. The last column says whether the stream and the reconstruction are
   byte-identical to this crate's. The tool fails if one is not.
@@ -75,14 +75,15 @@ requested):
 | 1 | 5 | 0.8795 | -12.0% | 24.49 | 0.8590 |
 | 2.25 | 5 | 2.0766 | -7.7% | 28.11 | 0.9151 |
 
-## Experimental encoder that hits the rate (#42)
+## The `Optimized` profile, which hits the rate (#42, #44)
 
-`wsq_codec::experimental::encode_at_rate`, a prototype for phase 3 of #17, hidden from the
-documentation and outside semantic versioning. It keeps the conformant stream layout and tables
+`Profile::Optimized` (it began as the hidden prototype `wsq_codec::experimental::encode_at_rate`,
+for phase 3 of #17, which now delegates to it; the figures below were measured with the
+prototype, whose encoder is the same). It keeps the conformant stream layout and tables
 and changes only the quantizer bin widths: those of the specification's bit allocation, all
 multiplied by one factor that a search chooses on the length of the whole stream. It stops on the
 first stream at most 0.5% below the target size (target: requested bpp × pixels / 8 bytes) and
-never returns one above it while one fits. Its streams carry implementation number 0. They are
+never returns one above it while one fits. Its streams carry implementation number 0 (a non-zero one is refused). They are
 not what NBIS writes for the requested rate, so they are never conformant.
 
 ### Conditions
@@ -97,8 +98,8 @@ not what NBIS writes for the requested rate, so they are never conformant.
 
 The images and the rates are those of the tables above, one thread, fastest of three runs.
 "Equal size" is the conformant encoder at the requested rate, found by bisection, whose stream is
-closest in length to the experimental one; its PSNR and SSIM are those of that stream. The last
-column compares NBIS's `dwsq` reconstruction of the experimental stream with this crate's.
+closest in length to the Optimized one; its PSNR and SSIM are those of that stream. The last
+column compares NBIS's `dwsq` reconstruction of the Optimized stream with this crate's.
 
 ### Per image and bit rate
 
@@ -134,7 +135,7 @@ column compares NBIS's `dwsq` reconstruction of the experimental stream with thi
 | 1 | 5 | 0.9977 | -0.37% / -0.07% | 24.67 | +0.000 | +0.0000 | 1.76 |
 | 2.25 | 5 | 2.2447 | -0.43% / -0.02% | 27.87 | +0.000 | +0.0000 | 3.02 |
 
-The time ratio is the sum of the experimental encoding times over the sum of the conformant ones
+The time ratio is the sum of the Optimized encoding times over the sum of the conformant ones
 at the same requested rate, on a loaded machine: it says the order of magnitude of the cost of the
 search (one quantization and one Huffman coding per stream tried), not a figure to quote.
 
@@ -146,12 +147,216 @@ search (one quantization and one Huffman coding per stream tried), not a figure 
 - At equal size (streams within 6 bytes of each other), PSNR is the same as the conformant
   encoder's to the 0.01 dB printed, and SSIM within 0.0001. This follows from the code rather than from the
   images: the conformant bit allocation already gives every subband its width divided by one
-  constant that depends on the requested rate (`src/quant.rs`, `bin_widths`), so scaling all the
+  constant that depends on the requested rate (`certified/src/quant.rs`, `bin_widths`), so scaling all the
   widths by one factor stays within the family of conformant encodings at other requested rates.
   The gain is in hitting the size, not in quality at a given size.
-- NBIS's `dwsq` decodes the 20 experimental streams to the same pixels as this crate. JNBIS was
+- NBIS's `dwsq` decodes the 20 Optimized streams to the same pixels as this crate. JNBIS was
   not run for this table.
 - The images are synthetic patterns, not fingerprints; one machine, under load.
+
+## Fingerprint measures: NFIQ 2 and minutiae (#43)
+
+PSNR and SSIM say little about what matters for a fingerprint: whether the decoded image is still
+a good fingerprint and still matches the original. `benches/quality.rs` therefore also drives
+two external programs, each optional, which never link to this crate and are not dependencies of
+it (the tool runs them as processes). When one is not given, its columns read "not run".
+
+- NFIQ 2 (`--nfiq2 PATH`): NIST's fingerprint quality score, 0 (worst) to 100 (best), of the
+  original and of the decoded image, and the change between them.
+- Minutiae and matching (`--mindtct PATH`, `--bozorth3 PATH`): NBIS 5.0.0's `mindtct` extracts
+  the minutiae of the original and of the decoded image (their number, and its change); `bozorth3`
+  matches the decoded image's minutiae against the original's. The original against itself is
+  the reference score (the largest this template can reach), and the tables give the match as a
+  share of it.
+
+### Protocol
+
+- Which images: the tools say nothing on noise, checkerboards or radial rings, so they run on
+  two kinds of image only: three synthetic ridge patterns (`--fingerprint-like`, added
+  automatically by any of the flags above) and the local directory of `WSQ_QUALITY_DIR`.
+- The ridge patterns (`benches/quality/synth.rs`) are 640x704 at 500 ppi, generated with
+  integer arithmetic only, so they are the same on every platform: concentric elliptical ridges
+  about 9 pixels apart (8.5 to 10.5 depending on the image) with 22 to 34 dislocations, which are
+  the ridge endings and bifurcations (the phase of the pattern gains `+-atan2` around each of
+  them), a grain of noise, a slow variation of the lighting, and a light background outside an
+  elliptical foreground. **They are not fingerprints**: no real print has such regular ridges,
+  and NFIQ 2 and a minutiae extractor were trained and tuned on real ones. Their NFIQ 2 scores
+  (48 to 50) are those of a mediocre image, not a measure of anything about this codec; the
+  point is the change from the original to the decoded image on the same pattern.
+- Which decoded images: for every image and requested rate, the stream of the conformant encoder,
+  that of the experimental encoder (`--optimized`, #42) and that of the conformant encoder at
+  the requested rate that gives a stream of the same size as the experimental one (found as for
+  the table of #42). All are decoded by this crate.
+- How they reach the tools: NFIQ 2 reads an 8-bit grayscale PNG, written by the benchmark (no
+  dependency) with a `pHYs` chunk of 500 ppi (it resamples other resolutions; the output reports
+  `Resampled 0` for these). `mindtct` reads ANSI/NIST, WSQ, JPEG and NBIS "IHead" files, not raw
+  ones; the benchmark writes IHead (a 288-byte header, then the pixels). Both the original and
+  the decoded image go in as uncompressed pixels, so no tool decodes a WSQ stream itself: the
+  decoded pixels are this crate's decoder's output (`--nbis` checks that NBIS's `dwsq` gives the
+  same pixels).
+- `mindtct` runs with its defaults and no `-m1`; `bozorth3` with its defaults (at most 150
+  minutiae, no score below 10 of them). The number of minutiae is the number of lines of the
+  `.xyt` file `mindtct` writes. A common reading of a `bozorth3` score is that above about 40 the
+  two prints are the same finger; the synthetic patterns' scores are not comparable with real
+  ones, which is why the share of the reference is given.
+- A reading the tool did not give (an error, or `NA`) shows as "n/a", and the aggregate table
+  counts it. A local directory is reported in aggregate only: no file name and no per-file row
+  appears in the output or in the CSV, only means and minima per requested rate and encoder.
+
+### Building the tools
+
+NBIS (`mindtct`, `bozorth3`; the same tree gives `cwsq` and `dwsq` for `--nbis`). It builds with
+`gcc` 13 once `-fcommon` is added: the sources define globals in several files, which GCC 10 and
+later reject by default.
+
+```sh
+curl -LO https://nigos.nist.gov/nist/nbis/nbis_v5_0_0.zip
+echo "0adf8ab0f6b0e4208de50ca00ba21d3d77112ecd66288757ddfed21f6bee92c3  nbis_v5_0_0.zip" | sha256sum -c
+unzip nbis_v5_0_0.zip && cd Rel_5.0.0
+mkdir -p "$PWD/../nbis-out"
+./setup.sh "$PWD/../nbis-out" --without-X11
+make config
+sed -i 's/^\(CFLAGS.*\)$/\1 -fcommon/' rules.mak
+make it                                # about 1.5 minutes
+# mindtct/bin/mindtct  bozorth3/bin/bozorth3  imgtools/bin/{cwsq,dwsq}
+```
+
+NFIQ 2 ([github.com/usnistgov/NFIQ2](https://github.com/usnistgov/NFIQ2), needs CMake 3.28 or
+later and a C++ compiler). The project's documented route is a recursive clone, whose
+superbuild also builds its own OpenCV (a long build):
+
+```sh
+git clone --recurse-submodules --branch v2.3.1 https://github.com/usnistgov/NFIQ2
+cmake -S NFIQ2 -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j4
+# build/install_staging/nfiq2/bin/nfiq2, and .../share/nist_plain_tir-ink.txt (the model)
+```
+
+The build measured below took a shortcut, which is not the one NIST validates: it used the
+distribution's OpenCV (Ubuntu 24.04, `libopencv-dev` 4.6.0) instead of building the `opencv`
+submodule, by replacing the superbuild's `ExternalProject_Add(OpenCV ...)` block in
+`CMakeLists.txt` by an empty one (`DOWNLOAD_COMMAND ""`, `CONFIGURE_COMMAND ""`,
+`BUILD_COMMAND ""`, `INSTALL_COMMAND ""`) and `-DOpenCV_DIR` of the `nfir` project by
+`/usr/lib/x86_64-linux-gnu/cmake/opencv4`. Packages installed for it:
+`libopencv-dev libtiff-dev libjpeg-dev libpng-dev libopenjp2-7-dev libdb-dev libdb++-dev
+libhwloc-dev libopenmpi-dev libssl-dev libsqlite3-dev liblzma-dev zlib1g-dev libpcre2-dev` (not
+each checked to be needed). Whether the scores equal those of NIST's pinned OpenCV was not
+checked: NIST's conformance images are not available here.
+
+`nfiq2` finds its model (`nist_plain_tir-ink.txt`) in the current directory unless told
+otherwise; the benchmark passes the one in the `share` directory next to the tool's `bin`, or
+the file given with `--nfiq2-model`.
+
+### Conditions
+
+| | |
+|---|---|
+| Date | 2026-11-10 |
+| Revision | `bench/quality-v2-43`, on top of `develop` at `c21a942` |
+| Machine | 4 vCPUs, Intel Xeon @ 2.10 GHz, Linux 6.18 (x86-64) |
+| Rust | 1.97.0, `cargo bench` (release profile) |
+| NBIS | 5.0.0 (archive SHA-256 as above), gcc 13.3.0, `-O2 -w -ansi -D_POSIX_SOURCE -D__NBISLE__ -fcommon` (the package's own flags plus `-fcommon`; not the `-ffp-contract=off` of the speed comparison, which changes nothing on baseline x86-64) |
+| NFIQ 2 | 2.3.1 (`69c39d9`), model `nist_plain_tir-ink`, FingerJet 5.2.1, OpenCV 4.6.0 (system), libbiomeval 12.0 |
+| Command | `cargo bench --bench quality -- --runs 1 --optimized --nbis NBIS/imgtools/bin --nfiq2 NFIQ2/build/install_staging/nfiq2/bin/nfiq2 --mindtct NBIS/mindtct/bin/mindtct --bozorth3 NBIS/bozorth3/bin/bozorth3` |
+
+The same run also checked, as `--nbis` does, that the conformant encoder's stream and
+reconstruction are byte-identical to NBIS's `cwsq` and `dwsq` on the four synthetic images and
+the three ridge patterns, at the four rates, and that `dwsq` decodes the experimental streams to
+this crate's pixels. Rates are 0.5, 0.75, 1.0 and 2.25 bits per pixel, one thread.
+
+### Results
+
+Three synthetic ridge patterns, a single run of each: there is no variance to report, and three
+images are too few for any statement about a population. The measurements are deterministic
+(same pixels, same tools, same figures on a second run).
+
+Per requested rate and encoder, means over the three patterns ("worst" is the largest drop,
+or the lowest share of the reference):
+
+| set | requested bpp | encoder | images | NFIQ 2 original | NFIQ 2 decoded | change, mean / worst | minutiae change, mean | bozorth3 match | bozorth3 self | match / self, mean / worst |
+|---|---|---|---|---|---|---|---|---|---|---|
+| synthetic | 0.5 | conformant | 3 | 49.0 | 46.0 | -3.0 / -9.0 | -1.3 | 69.3 | 84.0 | 83% / 78% |
+| synthetic | 0.5 | optimized | 3 | 49.0 | 45.3 | -3.7 / -6.0 | -3.3 | 69.7 | 84.0 | 85% / 77% |
+| synthetic | 0.5 | conformant, equal size | 3 | 49.0 | 46.7 | -2.3 / -4.0 | -4.0 | 69.7 | 84.0 | 85% / 77% |
+| synthetic | 0.75 | conformant | 3 | 49.0 | 43.3 | -5.7 / -7.0 | -4.3 | 72.0 | 84.0 | 86% / 78% |
+| synthetic | 0.75 | optimized | 3 | 49.0 | 45.3 | -3.7 / -6.0 | -4.3 | 74.0 | 84.0 | 87% / 74% |
+| synthetic | 0.75 | conformant, equal size | 3 | 49.0 | 46.0 | -3.0 / -6.0 | -4.0 | 74.0 | 84.0 | 87% / 74% |
+| synthetic | 1 | conformant | 3 | 49.0 | 46.0 | -3.0 / -5.0 | -4.0 | 71.0 | 84.0 | 85% / 78% |
+| synthetic | 1 | optimized | 3 | 49.0 | 46.7 | -2.3 / -4.0 | -4.0 | 72.3 | 84.0 | 86% / 76% |
+| synthetic | 1 | conformant, equal size | 3 | 49.0 | 46.7 | -2.3 / -4.0 | -4.3 | 71.7 | 84.0 | 85% / 76% |
+| synthetic | 2.25 | conformant | 3 | 49.0 | 43.0 | -6.0 / -9.0 | -2.3 | 73.3 | 84.0 | 88% / 82% |
+| synthetic | 2.25 | optimized | 3 | 49.0 | 45.0 | -4.0 / -6.0 | -3.0 | 76.7 | 84.0 | 91% / 86% |
+| synthetic | 2.25 | conformant, equal size | 3 | 49.0 | 45.0 | -4.0 / -7.0 | -3.0 | 76.3 | 84.0 | 90% / 82% |
+
+Per image (the original's NFIQ 2 score and minutiae count are in the same row as each decoded
+image's):
+
+| image | requested bpp | encoder | bytes | NFIQ 2 original | NFIQ 2 decoded | change | minutiae original | minutiae decoded | change | bozorth3 match | bozorth3 self | match / self |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ridgefp_a_640x704 | 0.5 | conformant | 12481 | 50 | 41 | -9 | 34 | 36 | +2 | 64 | 70 | 91% |
+| ridgefp_a_640x704 | 0.5 | optimized | 28088 | 50 | 45 | -5 | 34 | 33 | -1 | 67 | 70 | 96% |
+| ridgefp_a_640x704 | 0.5 | conformant, equal size | 28092 | 50 | 46 | -4 | 34 | 33 | -1 | 67 | 70 | 96% |
+| ridgefp_a_640x704 | 0.75 | conformant | 20662 | 50 | 43 | -7 | 34 | 30 | -4 | 68 | 70 | 97% |
+| ridgefp_a_640x704 | 0.75 | optimized | 42132 | 50 | 46 | -4 | 34 | 32 | -2 | 69 | 70 | 99% |
+| ridgefp_a_640x704 | 0.75 | conformant, equal size | 42132 | 50 | 48 | -2 | 34 | 33 | -1 | 69 | 70 | 99% |
+| ridgefp_a_640x704 | 1.0 | conformant | 27848 | 50 | 47 | -3 | 34 | 33 | -1 | 68 | 70 | 97% |
+| ridgefp_a_640x704 | 1.0 | optimized | 56056 | 50 | 47 | -3 | 34 | 32 | -2 | 67 | 70 | 96% |
+| ridgefp_a_640x704 | 1.0 | conformant, equal size | 56056 | 50 | 46 | -4 | 34 | 32 | -2 | 67 | 70 | 96% |
+| ridgefp_a_640x704 | 2.25 | conformant | 76288 | 50 | 41 | -9 | 34 | 33 | -1 | 67 | 70 | 96% |
+| ridgefp_a_640x704 | 2.25 | optimized | 126515 | 50 | 44 | -6 | 34 | 31 | -3 | 68 | 70 | 97% |
+| ridgefp_a_640x704 | 2.25 | conformant, equal size | 126512 | 50 | 43 | -7 | 34 | 32 | -2 | 69 | 70 | 99% |
+| ridgefp_b_640x704 | 0.5 | conformant | 12690 | 48 | 46 | -2 | 46 | 44 | -2 | 105 | 132 | 80% |
+| ridgefp_b_640x704 | 0.5 | optimized | 28054 | 48 | 42 | -6 | 46 | 40 | -6 | 101 | 132 | 77% |
+| ridgefp_b_640x704 | 0.5 | conformant, equal size | 28050 | 48 | 45 | -3 | 46 | 38 | -8 | 101 | 132 | 77% |
+| ridgefp_b_640x704 | 0.75 | conformant | 19232 | 48 | 41 | -7 | 46 | 41 | -5 | 109 | 132 | 83% |
+| ridgefp_b_640x704 | 0.75 | optimized | 42122 | 48 | 42 | -6 | 46 | 39 | -7 | 116 | 132 | 88% |
+| ridgefp_b_640x704 | 0.75 | conformant, equal size | 42122 | 48 | 42 | -6 | 46 | 39 | -7 | 116 | 132 | 88% |
+| ridgefp_b_640x704 | 1.0 | conformant | 26959 | 48 | 43 | -5 | 46 | 39 | -7 | 106 | 132 | 80% |
+| ridgefp_b_640x704 | 1.0 | optimized | 56080 | 48 | 44 | -4 | 46 | 41 | -5 | 112 | 132 | 85% |
+| ridgefp_b_640x704 | 1.0 | conformant, equal size | 56081 | 48 | 45 | -3 | 46 | 40 | -6 | 110 | 132 | 83% |
+| ridgefp_b_640x704 | 2.25 | conformant | 73020 | 48 | 46 | -2 | 46 | 43 | -3 | 112 | 132 | 85% |
+| ridgefp_b_640x704 | 2.25 | optimized | 126378 | 48 | 44 | -4 | 46 | 41 | -5 | 119 | 132 | 90% |
+| ridgefp_b_640x704 | 2.25 | conformant, equal size | 126379 | 48 | 44 | -4 | 46 | 41 | -5 | 119 | 132 | 90% |
+| ridgefp_c_640x704 | 0.5 | conformant | 14485 | 49 | 51 | +2 | 30 | 26 | -4 | 39 | 50 | 78% |
+| ridgefp_c_640x704 | 0.5 | optimized | 28068 | 49 | 49 | +0 | 30 | 27 | -3 | 41 | 50 | 82% |
+| ridgefp_c_640x704 | 0.5 | conformant, equal size | 28070 | 49 | 49 | +0 | 30 | 27 | -3 | 41 | 50 | 82% |
+| ridgefp_c_640x704 | 0.75 | conformant | 23681 | 49 | 46 | -3 | 30 | 26 | -4 | 39 | 50 | 78% |
+| ridgefp_c_640x704 | 0.75 | optimized | 42139 | 49 | 48 | -1 | 30 | 26 | -4 | 37 | 50 | 74% |
+| ridgefp_c_640x704 | 0.75 | conformant, equal size | 42132 | 49 | 48 | -1 | 30 | 26 | -4 | 37 | 50 | 74% |
+| ridgefp_c_640x704 | 1.0 | conformant | 30079 | 49 | 48 | -1 | 30 | 26 | -4 | 39 | 50 | 78% |
+| ridgefp_c_640x704 | 1.0 | optimized | 56226 | 49 | 49 | +0 | 30 | 25 | -5 | 38 | 50 | 76% |
+| ridgefp_c_640x704 | 1.0 | conformant, equal size | 56226 | 49 | 49 | +0 | 30 | 25 | -5 | 38 | 50 | 76% |
+| ridgefp_c_640x704 | 2.25 | conformant | 80389 | 49 | 42 | -7 | 30 | 27 | -3 | 41 | 50 | 82% |
+| ridgefp_c_640x704 | 2.25 | optimized | 126280 | 49 | 47 | -2 | 30 | 29 | -1 | 43 | 50 | 86% |
+| ridgefp_c_640x704 | 2.25 | conformant, equal size | 126282 | 49 | 48 | -1 | 30 | 28 | -2 | 41 | 50 | 82% |
+
+### What these figures say, and what they do not
+
+- At the same requested rate the two encoders do not write streams of the same size: the
+  conformant encoder lands 37% to 56% below the requested rate on these patterns (12.5 kB
+  against 28.1 kB for `ridgefp_a` at 0.5 bpp), the experimental one 0.17% to 0.47% below.
+  Comparing them at one requested rate therefore compares unequal sizes; the equal-size row is
+  the fair comparison.
+- At equal size (streams within 7 bytes of each other) the experimental encoder and the
+  conformant one differ, in both directions, by at most 3 points of NFIQ 2 on one image (1.4
+  points on the mean change), by at most 2 minutiae, and by at most 4 points of the match share
+  on one image (0 on 9 of the 12). As the table of #42 explains, the two use the same family of
+  quantizers (the experimental one only rescales the bin widths), so no difference is expected,
+  and none beyond the noise of these tools on three images was measured. Nothing here shows the
+  optimized encoder to be better or worse for NFIQ 2 or matching at a given size.
+- From the original to the decoded image NFIQ 2 changes by -9 to +2 points, at every rate, and
+  not monotonically in the rate (for `ridgefp_a` and the conformant encoder: 41 at 0.5 bpp, 47 at
+  1.0, 41 at 2.25). A pattern this regular, and a score trained on real prints, do not support
+  the reading that more bits always give a better score; the figures are reported as they
+  are and no trend is drawn from them.
+- Minutiae: of the 36 reconstructions, 35 have fewer minutiae than the original (up to 8
+  fewer), 0 the same number and 1 more (at most 2 more), and their minutiae match the
+  original's at 74% to 99% of the reference score. Whether a given `bozorth3` score means "the
+  same finger" is a question for real prints; the reference of `ridgefp_c` is only 50, because
+  it has 30 minutiae.
+- What was not measured: real fingerprints (none may be committed or published; the local
+  directory path was exercised with copies of the synthetic patterns only, to check that
+  nothing is listed), other NFIQ 2 models or OpenCV versions, a matcher other than `bozorth3`,
+  and rates outside 0.5 to 2.25 bpp.
 
 ## Reproducing
 
@@ -163,11 +368,29 @@ cargo bench --bench quality -- --large --nbis /path/to/nbis/bin --csv quality.cs
 Streams written earlier by NBIS, on another machine for instance, are compared with
 `--nbis-streams DIR` (files `IMAGE_RATE.wsq`); `--export DIR` writes the images as PGM for
 that. `WSQ_QUALITY_DIR` names a local directory of 8-bit PGM files to measure as well; it stays
-outside the repository, and no real fingerprint is ever committed. `--optimized` adds the
-experimental encoder of #42 and the conformant encoder at equal size:
+outside the repository, and no real fingerprint is ever committed or published: the directory's
+images are reported in aggregate only (means and minima per requested rate, no file name, no
+per-file row, nothing in the CSV), and with the tools below they are the ones that matter most.
+`--optimized` adds the `Optimized` profile (#42, #44) and the conformant encoder at equal size:
 
 ```sh
 cargo bench --bench quality -- --large --optimized --nbis /path/to/nbis/bin --csv quality.csv
 ```
+
+The fingerprint measures of #43 need the tools of the section above; each is optional, and
+without any of them nothing changes (CI runs `cargo bench --bench quality -- --runs 1`):
+
+```sh
+cargo bench --bench quality -- --optimized \
+  --nfiq2 /path/to/nfiq2 [--nfiq2-model /path/to/nist_plain_tir-ink.txt] \
+  --mindtct /path/to/mindtct --bozorth3 /path/to/bozorth3
+WSQ_QUALITY_DIR=/local/prints cargo bench --bench quality -- --nfiq2 ... --mindtct ... --bozorth3 ...
+```
+
+The paths can also be set with `WSQ_NFIQ2`, `WSQ_NFIQ2_MODEL`, `WSQ_MINDTCT` and
+`WSQ_BOZORTH3`. `--fingerprint-like` adds the three synthetic ridge patterns without any tool
+(the columns then read "not run"). Since #43 the tool's mean tables have a first column naming
+the set of images ("synthetic" or "local directory"), and the CSV has six more columns
+(`nfiq2_original` to `bozorth3_self`) before `requested_bpp`, which is now on every line.
 
 Speed and memory against NBIS are in [nbis-comparison.md](nbis-comparison.md).

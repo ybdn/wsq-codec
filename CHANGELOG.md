@@ -2,6 +2,122 @@
 
 ## Unreleased
 
+## 1.0.0
+
+The public API is reviewed and frozen (#45); `docs/api-1.0.md` records each decision. From this
+release `wsq-codec` follows semantic versioning, and CI checks it with `cargo-semver-checks`.
+
+**What semver covers.** The public items of the crate and of its `image` feature, their
+signatures, the variants and fields of the types, the decoded pixels, and the output of the
+conformant encoder (byte for byte the reference's; a change to it is a major release, since it
+bears on the FBI certification). **What it does not.** The exact bytes of the `Optimized`
+profile's streams (its promises about size, in `Profile::Optimized`, are covered); the text of
+`Display` for the errors and the `&'static str` reasons they carry; the `Debug` output of any
+type; speed and memory use. **MSRV.** The Minimum Supported Rust Version (1.85) is raised in a
+minor release at most, never in a patch release, and always noted here. The `image` feature
+exposes the `image` 0.25 crate's types: a new `image` major version arrives as a new feature, so
+`image` keeps meaning 0.25.
+
+Breaking, against 0.2.0:
+
+- The hidden `experimental` module is gone (`encode_at_rate`, `RATE_TOLERANCE`): it was declared
+  outside semver and nothing in the crate needed it any more. Use `Profile::Optimized` and
+  `Profile::OPTIMIZED_TOLERANCE`. (The shorthand also ignored `software`; `Optimized` refuses it.)
+- The struct variants of `DecodeError` and `EncodeError` (`InvalidSegment`, `InvalidDimensions`,
+  `TooLarge`, `OutputSize`, `PixelCountMismatch`) are `#[non_exhaustive]`, so that context (a byte
+  offset, for instance) can be added without a major release. Patterns need `..`
+  (`DecodeError::TooLarge { max_pixels, .. }`) and code outside the crate cannot build these
+  variants, which is only useful to compare errors in tests: use `matches!`.
+- `ReadError` and `WriteError` no longer report the same message twice in a chain of sources:
+  `Io` displays as "cannot read WSQ data" / "cannot write WSQ data" (the I/O error is its
+  `source()`, no longer repeated in the text), and `Decode` / `Encode` display as the error they
+  wrap and return that error's own `source()` (none) instead of the error itself. Match on the
+  variant to reach the inner error. `wsq` prints the chain.
+
+Added, not breaking:
+
+- `MAX_DIMENSION` (65535) and `MIN_ENCODE_DIMENSION` (81), the limits on `usize` dimensions that
+  the format and the encoder impose, documented in the crate documentation, `Image`, `Info` and
+  the errors.
+- `Hash` on `Image`, `Info`, `DecodeOptions` and `DecodeError`; `Default` and `options()` on
+  `Decoder` and `Encoder`; `Debug` on `image::WsqDecoder` (it shows the header, not the stream);
+  `#[must_use]` on the constructors and accessors that return a value. `tests/api.rs` checks
+  `Send + Sync` and the common traits of every public type.
+- `clippy::missing_errors_doc` and `clippy::missing_panics_doc` are enforced on the crate.
+- The `WsqDecoder` documentation says that `DecodeOptions::max_pixels` is checked when the image
+  is read, not when the decoder is created (it always was).
+
+`wsq-cli` is 0.3.0 and depends on `wsq-codec` 1.0: its command line is not part of this review
+and stays below 1.0.
+
+Carried over from the work merged since 0.2.0:
+
+- Encoding profiles (#44): `EncodeOptions` gains `profile` (`with_profile`), a `#[non_exhaustive]`
+  `Profile` that is `Conformant` (the default, the encoder aligned with the reference, the only
+  one meant for certification, output unchanged) or `Optimized` (the encoder of #42: the bin
+  widths scaled to meet the size `bitrate` asks for, at most `Profile::OPTIMIZED_TOLERANCE` below
+  it, never certified). `encode`, `Encoder` and `encode_to` honour it. `Optimized` with a non-zero
+  `software` returns the new `EncodeError::SoftwareRequiresConformant`. `wsq encode` takes
+  `--profile conformant|optimized`. The quality benchmark's `--optimized` mode uses the profile
+  directly.
+- The last two infallible allocations that followed the image are fallible (#67): the encoder's
+  compressed output, reserved from the expected size and grown with `try_reserve`, and the
+  wavelet transform's transposition blocks, on the single-threaded and the multithreaded path
+  (the threads leave the transform together). A refused allocation gives
+  `EncodeError::OutOfMemory` or `DecodeError::OutOfMemory` instead of aborting; output is
+  unchanged. `src/mem.rs` documents the `grep` that checks that no infallible allocation
+  proportional to the pixel count remains, and tests refuse each allocation in turn.
+- Determinism is now checked on more targets (#65): CI runs the tests and the benchmark's stream
+  hashes on AArch64 Linux (`ubuntu-24.04-arm`) and on `wasm32-wasip1` under wasmtime, and the
+  weekly workflow runs the tests on big-endian `s390x` under QEMU (`cross`). Each job prints
+  `uname -m` and `rustc -vV`. The README lists the verified targets. No change to the codec;
+  the `par` unit test no longer expects a real thread on WASI, which has none.
+- Quality benchmark, second version (#43): `cargo bench --bench quality` can also measure NIST's
+  NFIQ 2 score (`--nfiq2 PATH`) and NBIS's minutiae (`--mindtct PATH`) and `bozorth3` match
+  score (`--bozorth3 PATH`) of the decoded image against the original, for the conformant
+  encoder, the experimental one and the conformant one at equal size. The tools are external
+  programs run as processes, each optional ("not run" when absent), and the crate gains no
+  dependency. Three synthetic ridge patterns (`--fingerprint-like`, generated) give the tools
+  something to find; images of `WSQ_QUALITY_DIR` are now reported in aggregate only, with no
+  file name and no per-file row, and the CSV has six more columns. `docs/quality.md` has the
+  build instructions and the first figures, of 10 November 2026, on the synthetic patterns only.
+- Benchmark against NBIS, third version (#68; tooling and documentation only, the codec is unchanged):
+  `bench/nbis-compare` reports medians with 95 % percentile bootstrap intervals (fixed seed), thread
+  scaling at 1, 2, 4 and 8 threads with a verdict, and memory read the same way for NBIS and the
+  crate; a `WSQ_CORPUS_DIR` mode measures a local corpus of real fingerprints and writes aggregates
+  only (never a file name or a per-file row). `docs/nbis-comparison.md` and the README
+  "Performance" section are refreshed with the 10 November 2026 run, whose machine was shared and
+  noisy; the real-corpus run is recorded there as not executed.
+- WebAssembly package and browser demo (#48): the new `wasm/` workspace member `wsq-wasm`
+  (`publish = false` on crates.io) wraps the codec with wasm-bindgen: `decode`, `readInfo` and
+  `encode` (options `bitrate`, `ppi`, `comment`, `profile`) move `Uint8Array`s and metadata, and
+  errors are JavaScript exceptions with the Rust message. The release workflow publishes it on npm
+  as `wsq-codec` (bundler, Node.js and no-bundler `web` builds) with provenance. `wasm/demo` is a
+  static page, deployed to GitHub Pages, that opens WSQ files and converts PNG or JPEG to WSQ
+  entirely in the browser: no upload, a strict Content-Security-Policy, works offline. `wsq-codec`
+  itself is unchanged and still has no dependency; CI builds the package and runs its tests under
+  Node.js.
+- C API (#50): the `capi` crate (`wsq-capi`, not published on crates.io) builds `libwsq`, a static
+  and a shared library, with the generated header `capi/include/wsq.h`: `wsq_decode`,
+  `wsq_decode_into`, `wsq_read_info`, `wsq_encode`, option structures that carry their size,
+  stable status codes, `wsq_*_free` for everything the library returns, and no panic across the
+  boundary. A C program is built and run against it in CI on Linux, macOS and Windows, and the
+  release workflow attaches the libraries and the header to the GitHub release. The core crate is
+  unchanged. See `capi/README.md`.
+- Python bindings (#49): the `wsq-codec` package on PyPI (`import wsq_codec`), built with PyO3 and
+  maturin from `python/` (`decode`, `read_info`, `encode`, NumPy `uint8` arrays, exceptions
+  derived from `ValueError`, type stubs), with wheels for Linux, macOS and Windows built in CI and
+  published by the release workflow. The Rust crate is unchanged.
+- The certified part is split out as the `wsq-certified` crate (`certified/`, 1.0.0, #46): the
+  decoder, the conformant encoder and `inspect`, versioned with the FBI certificate, with a pinned
+  compiler (`certified/rust-toolchain.toml`) and a CI guard that fails a pull request changing it
+  without raising its version. `wsq-codec` depends on it at the exact version `=1.0.0` and
+  re-exports it: its public API, the decoded pixels and the conformant encoder's bytes do not
+  change (`Image`, `Decoder`, `EncodeOptions` and `Encoder` are `wsq-codec`'s own types over the
+  certified ones; the `Optimized` search stays in `wsq-codec`). `wsq cert` runs `wsq-certified`
+  directly and `submission.txt` names its version. `docs/certification.md` has the design, the
+  compiler decision and the submission procedure. The NIST submission itself is not part of this.
+
 ## 0.2.0
 
 - `decode` returns the stream's metadata with the pixels (#29): `Image` gains `software` and

@@ -27,7 +27,9 @@ use crate::{DecodeError, DecodeOptions, EncodeError, EncodeOptions, Image, Info}
 
 /// Converts a decoded image. This fails with a parameter error when the
 /// pixel buffer no longer holds `width * height` bytes, which only happens
-/// if the public fields of the [`Image`] were changed after decoding.
+/// if the public fields of the [`Image`] were changed after decoding. The
+/// dimensions always fit `GrayImage`'s `u32` ones: the format stops at
+/// [`MAX_DIMENSION`](crate::MAX_DIMENSION).
 impl TryFrom<Image> for GrayImage {
     type Error = ImageError;
 
@@ -44,8 +46,10 @@ impl TryFrom<Image> for GrayImage {
     }
 }
 
-/// Encodes a grayscale image, whose dimensions must be between 81 and
-/// 65535 as for [`encode`](crate::encode).
+/// Encodes a grayscale image, whose dimensions must be between
+/// [`MIN_ENCODE_DIMENSION`](crate::MIN_ENCODE_DIMENSION) (81) and
+/// [`MAX_DIMENSION`](crate::MAX_DIMENSION) (65535) as for
+/// [`encode`](crate::encode).
 ///
 /// # Errors
 ///
@@ -70,7 +74,8 @@ fn decoding_error(e: DecodeError) -> ImageError {
 /// [`register_hooks`] has run, and which can also be used directly.
 ///
 /// It reads the stream and its header when created, and decodes the image
-/// when asked for its pixels.
+/// when asked for its pixels. The [`DecodeOptions::max_pixels`] limit is
+/// checked at that point, not when the decoder is created.
 pub struct WsqDecoder {
     data: Vec<u8>,
     info: Info,
@@ -84,8 +89,10 @@ impl WsqDecoder {
     ///
     /// # Errors
     ///
-    /// Fails if reading fails, or if the headers are not a valid WSQ stream
-    /// or announce more pixels than the options allow.
+    /// Fails if reading fails or if the headers are not a valid WSQ stream.
+    /// The pixel limit is not checked here, since the headers alone give the
+    /// dimensions that `image` may want to see first; it is checked when
+    /// the image is read.
     pub fn new<R: Read>(reader: R) -> ImageResult<Self> {
         Self::with_options(reader, DecodeOptions::default())
     }
@@ -107,8 +114,20 @@ impl WsqDecoder {
     }
 
     /// What the stream says about its image.
+    #[must_use]
     pub fn info(&self) -> &Info {
         &self.info
+    }
+}
+
+/// Shows the header and the options, not the stream.
+impl std::fmt::Debug for WsqDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WsqDecoder")
+            .field("info", &self.info)
+            .field("options", &self.options)
+            .field("stream_len", &self.data.len())
+            .finish()
     }
 }
 
@@ -148,7 +167,8 @@ impl ImageDecoder for WsqDecoder {
 /// [`DecodeOptions`]. Returns `false` if a decoder for the `wsq` extension
 /// was already registered, in which case it stays in place.
 ///
-/// This is [`register_hooks_with`] with the default options.
+/// This is [`register_hooks_with`] with the default options. The result may
+/// be ignored when it does not matter which registration wins.
 pub fn register_hooks() -> bool {
     register_hooks_with(DecodeOptions::default())
 }

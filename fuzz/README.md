@@ -25,7 +25,7 @@ cargo +nightly fuzz run decode_with fuzz/corpus/decode_with fuzz/seeds/streams -
 libFuzzer writes the new inputs it finds to the first corpus directory: give it one of its own
 (`fuzz/corpus/<target>`, ignored by git) before the seeds, as above, or it fills the seeds up.
 `fuzz/seeds/streams` seeds `decode_with`, `read_info` and `read_quantized`, and
-`fuzz/seeds/roundtrip` seeds `roundtrip`. The fixtures of `tests/data` make good extra seeds for
+`fuzz/seeds/roundtrip` seeds `roundtrip`. The fixtures of `certified/tests/data` make good extra seeds for
 the first three. Crashes go to `fuzz/artifacts/<target>`, also ignored by git. Turn a crash into
 a regression test and fix it; do not commit it as a seed.
 
@@ -33,11 +33,11 @@ a regression test and fix it; do not commit it as a seed.
 
 The seeds are a handful of synthetic streams, about 5 KB in all: valid streams with random
 dimensions, filter banks, quantization tables and coefficients, one mutated copy, and one
-encoder output. They come from the generator of `src/testgen.rs`, which the unit test
+encoder output. They come from the generator of `certified/src/testgen.rs`, which the unit test
 `generated_streams_decode_or_fail_cleanly` also uses. To write them again:
 
 ```sh
-WSQ_SEED_DIR=fuzz/seeds cargo test --lib write_fuzz_seeds -- --ignored
+WSQ_SEED_DIR=$PWD/fuzz/seeds cargo test -p wsq-certified --lib write_fuzz_seeds -- --ignored
 ```
 
 Never add real fingerprints, or data from a real transaction, as seeds.

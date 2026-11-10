@@ -2,13 +2,27 @@
 # Runs the comparison of docs/nbis-comparison.md: identity checks, then timing rounds.
 #
 #   NBIS=/path/to/Rel_5.0.0 [NBIS_ARCHIVE=/path/to/nbis_v5_0_0.zip] [WITH_RELEASED=1] \
-#     bench/nbis-compare/run.sh WORKDIR [ROUNDS [ROUNDS_LARGE]]
+#     [THREADS="1 2 4 8"] bench/nbis-compare/run.sh WORKDIR [ROUNDS [ROUNDS_LARGE]]
 #
 # NBIS is the unpacked NBIS 5.0.0 source tree. NBIS_ARCHIVE, optional, is the archive it came
 # from: its SHA-256 is checked against the one in docs/nbis-comparison.md and recorded.
 # WITH_RELEASED=1 also builds the crates.io release pinned in Cargo.released.lock, measured
-# next to this checkout's revision. ROUNDS (default 21) is the number of timed calls per
-# image, rate and implementation; ROUNDS_LARGE (default 11) applies to the 5500x8000 image.
+# at 1 and 4 threads next to this checkout's revision. ROUNDS (default 21) is the number of
+# timed calls per image, rate and implementation; ROUNDS_LARGE (default 11) applies to the
+# 5500x8000 image. THREADS (default "1 2 4 8") lists the thread counts measured for this
+# checkout; it must include 1. NBIS has no threads and is always measured once.
+#
+# Output in WORKDIR: machine.txt, identity.txt, results.csv, summary.md (distributions),
+# ci.md (medians with 95 % bootstrap intervals, ratios to NBIS, thread scaling, memory).
+#
+# Real fingerprints, on the maintainer's machine only (the corpus never leaves it):
+#
+#   WSQ_CORPUS_DIR=/path/to/corpus NBIS=... bench/nbis-compare/run.sh WORKDIR [REPS]
+#
+# switches to the corpus mode of corpus.sh: it measures the .pgm (8-bit binary) and .wsq files
+# found under that directory and writes corpus-summary.md, which holds aggregates only (counts,
+# ratios, intervals), no file name and no per-file row. See bench/nbis-compare/README.md.
+#
 # Linux only (/proc). Nothing is written outside WORKDIR, except target/ of this crate.
 set -euo pipefail
 
@@ -16,6 +30,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 work=${1:?usage: run.sh WORKDIR [ROUNDS [ROUNDS_LARGE]]}
 rounds=${2:-21}
 rounds_large=${3:-11}
+threads_list=${THREADS:-1 2 4 8}
 : "${NBIS:?set NBIS to the NBIS 5.0.0 source directory (Rel_5.0.0)}"
 nbis_sha256=0adf8ab0f6b0e4208de50ca00ba21d3d77112ecd66288757ddfed21f6bee92c3
 mkdir -p "$work"
@@ -47,7 +62,8 @@ gcc -O2 -w -ffp-contract=off -fno-fast-math -D__NBISLE__ $inc \
 
 cargo build --release --locked --manifest-path "$here/Cargo.toml" --target-dir "$work/target-current"
 cp "$work/target-current/release/wsq-nbis" "$work/wsq-nbis-current"
-impls=(nbis:0 current:1 current:4)
+impls=(nbis:0)
+for t in $threads_list; do impls+=("current:$t"); done
 released_version=
 if [ "${WITH_RELEASED:-0}" = 1 ]; then
   released_version=$(grep -A1 'name = "wsq-codec"' "$here/Cargo.released.lock" | sed -n 's/^version = "\(.*\)"/\1/p')
@@ -83,6 +99,7 @@ fi
   echo "memory: $(free -m | awk '/^Mem:/ {print $2 " MiB"}')"
   echo "rustc: $(rustc -V)"
   echo "RUSTFLAGS: ${RUSTFLAGS:-unset}"
+  echo "thread counts measured for wsq-codec: $threads_list"
   echo "gcc: $(gcc --version | head -1)"
   echo "nbis flags: -O2 -w -ffp-contract=off -fno-fast-math -D__NBISLE__"
   echo "nbis source: $nbis_note"
@@ -91,6 +108,13 @@ fi
   echo "load average before any work (1, 5, 15 min): $load_before"
   echo "CPU over 5 s before any work: $cpu_before"
 } > "$work/machine.txt"
+
+# --- corpus mode: real fingerprints, aggregates only ---------------------------------------------
+if [ -n "${WSQ_CORPUS_DIR:-}" ]; then
+  # shellcheck source=corpus.sh
+  . "$here/corpus.sh"
+  exit 0
+fi
 
 # --- images, then identity in both directions -------------------------------------------------
 "$work/wsq-nbis-current" gen "$work/img"
@@ -175,4 +199,5 @@ stat_end=$(head -1 /proc/stat)
     idle = (y[5] - x[5]) + (y[6] - x[6]); steal = y[9] - x[9]
     printf "CPU over the timing phase: busy %.1f%%, steal %.1f%% (this benchmark included)\n", 100 * (t - idle) / t, 100 * steal / t }'
 } >> "$work/machine.txt"
-python3 -I "$here/summarize.py" "$csv" | tee "$work/summary.md"
+python3 -I "$here/summarize.py" "$csv" > "$work/summary.md"
+python3 -I "$here/summarize.py" "$csv" --ci | tee "$work/ci.md"
