@@ -1,0 +1,25 @@
+[package]
+name = "wsq-python"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Python bindings (PyO3) for the wsq-codec WSQ fingerprint image codec"
+license = "MIT"
+repository = "https://github.com/ybdn-ei/wsq-codec"
+homepage = "https://github.com/ybdn-ei/wsq-codec"
+readme = "README.md"
+# Distributed on PyPI as `wsq-codec` (built by maturin), not on crates.io.
+publish = false
+
+[lib]
+name = "_wsq_codec"
+crate-type = ["cdylib"]
+# A Python extension cannot link into a Rust test binary; the tests are in `tests/`, in Python.
+test = false
+doctest = false
+
+[dependencies]
+wsq-codec = { version = "1.0.0", path = ".." }
+# `abi3-py39`: one wheel per platform for every CPython from 3.9.
+pyo3 = { version = "0.30", features = ["abi3-py39"] }
+numpy = "0.30"

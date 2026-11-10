@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- C API (#50): the `capi` crate (`wsq-capi`, not published on crates.io) builds `libwsq`, a static and a shared library, with the generated header `capi/include/wsq.h`: `wsq_decode`, `wsq_decode_into`, `wsq_read_info`, `wsq_encode`, option structures that carry their size, stable status codes, `wsq_*_free` for everything the library returns, and no panic across the boundary. A C program is built and run against it in CI on Linux, macOS and Windows, and the release workflow attaches the libraries and the header to the GitHub release. The core crate is unchanged. See `capi/README.md`.
-
 ## 1.0.0
 
 The public API is reviewed and frozen (#45); `docs/api-1.0.md` records each decision. From this
@@ -99,6 +97,17 @@ Carried over from the work merged since 0.2.0:
   entirely in the browser: no upload, a strict Content-Security-Policy, works offline. `wsq-codec`
   itself is unchanged and still has no dependency; CI builds the package and runs its tests under
   Node.js.
+- C API (#50): the `capi` crate (`wsq-capi`, not published on crates.io) builds `libwsq`, a static
+  and a shared library, with the generated header `capi/include/wsq.h`: `wsq_decode`,
+  `wsq_decode_into`, `wsq_read_info`, `wsq_encode`, option structures that carry their size,
+  stable status codes, `wsq_*_free` for everything the library returns, and no panic across the
+  boundary. A C program is built and run against it in CI on Linux, macOS and Windows, and the
+  release workflow attaches the libraries and the header to the GitHub release. The core crate is
+  unchanged. See `capi/README.md`.
+- Python bindings (#49): the `wsq-codec` package on PyPI (`import wsq_codec`), built with PyO3 and
+  maturin from `python/` (`decode`, `read_info`, `encode`, NumPy `uint8` arrays, exceptions
+  derived from `ValueError`, type stubs), with wheels for Linux, macOS and Windows built in CI and
+  published by the release workflow. The Rust crate is unchanged.
 
 ## 0.2.0
 

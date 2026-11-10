@@ -56,6 +56,20 @@ compiler). After changing an `extern "C"` item, regenerate the committed header 
 install cbindgen --version 0.29.4 --locked` and `cbindgen --config capi/cbindgen.toml --crate
 wsq-capi --output capi/include/wsq.h`: CI fails on any difference. See `capi/README.md`.
 
+The Python bindings (`python/`, PyO3 and maturin; the distribution is `wsq-codec` on PyPI, the
+import `wsq_codec`) are a workspace member that the commands above leave out (select it with
+`-p wsq-python`). To check a change to them, in a virtual environment:
+
+```sh
+cargo clippy -p wsq-python --all-targets -- -D warnings
+pip install maturin numpy pytest
+cd python && maturin develop --release && pytest
+```
+
+`python/tests` holds the round-trip tests; they compare the conformant encoder with the NBIS
+fixtures in `tests/data`. The core crate takes no dependency for the bindings: PyO3 and `numpy`
+are dependencies of `wsq-python` only.
+
 Optionally, `cargo deny check` (install with `cargo install --locked cargo-deny`) runs the
 supply-chain checks CI runs.
 
@@ -81,12 +95,13 @@ docs: ...    ci: ...    feat: ...    chore: ...
 Maintainers only. A release is published by the `Release` workflow when a `v*` tag is pushed
 on `main`; nobody publishes from a personal machine.
 
-1. On `develop`, set `version` in `Cargo.toml` (and in `wasm/Cargo.toml`, which the npm package
-   takes its version from, and the `version` of the `path` dependencies on `wsq-codec` in
-   `cli/Cargo.toml` and `wasm/Cargo.toml`), rename the `Unreleased` section of `CHANGELOG.md` to
-   the version (a line `## X.Y.Z`, as the workflow looks for it exactly) and leave an empty
-   `## Unreleased` above it, and open a pull request to `main`. A minimum Rust version bump is a
-   minor release, noted in the changelog.
+1. On `develop`, set `version` in `Cargo.toml`, in `wasm/Cargo.toml` (the npm package takes
+   its version from it) and in `python/Cargo.toml` (the workflow refuses a tag when they differ;
+   the Python package takes the crate's version), and the `version` of the `path` dependencies on
+   `wsq-codec` in `cli/Cargo.toml` and `wasm/Cargo.toml`; rename the `Unreleased` section of
+   `CHANGELOG.md` to the version (a line `## X.Y.Z`, as the workflow looks for it exactly) and
+   leave an empty `## Unreleased` above it, and open a pull request to `main`. A minimum Rust
+   version bump is a minor release, noted in the changelog.
 2. Once it is merged, tag the merge commit and push the tag:
    `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The workflow checks that the tag matches `Cargo.toml` and that `CHANGELOG.md` has a section
@@ -94,7 +109,10 @@ on `main`; nobody publishes from a personal machine.
    Publishing (OIDC, no stored token), and creates the GitHub release from the changelog
    section. In parallel, the `npm` job builds the WebAssembly package (`wasm/`) and publishes it
    to npm as `wsq-codec`, with provenance, after checking that `wasm/Cargo.toml` has the same
-   version. The `Pages` workflow redeploys the demo when `main` is updated.
+   version. The `Pages` workflow redeploys the demo when `main` is updated. In parallel it
+   also builds the Python wheels (Linux x86-64 and AArch64, macOS Apple
+   silicon and Intel, Windows x64) and the source distribution, checks them with `twine check`,
+   and publishes them to PyPI through Trusted Publishing from the `pypi` environment.
 4. Merge `main` back into `develop`.
 
 The workflow can also be started by hand with `dry_run` set (the default for a manual run): it
@@ -115,3 +133,23 @@ runs every check and `cargo publish --dry-run` without publishing anything.
 2. **GitHub Pages.** In the repository's Settings > Pages, set Source to "GitHub Actions". The
    `Pages` workflow then deploys `wasm/demo` on every push to `main` (or when started by hand),
    at <https://ybdn-ei.github.io/wsq-codec/>.
+
+### One-time setup for PyPI
+
+Maintainers do this once, before the first tag that publishes the Python package. Nothing is
+stored as a secret: PyPI trusts the workflow through OIDC, as crates.io does.
+
+1. On GitHub, in the repository's Settings, Environments, create an environment named `pypi`
+   (optionally with required reviewers, so that a tag waits for approval before publishing, and
+   with deployment restricted to `v*` tags).
+2. On PyPI, log in with the account that will own the project and, in Account settings,
+   Publishing, add a *pending publisher* (the project does not exist until the first upload):
+   project name `wsq-codec`, owner `ybdn-ei`, repository `wsq-codec`, workflow name
+   `release.yml`, environment name `pypi`. After the first release the pending publisher
+   becomes a normal Trusted Publisher of the project.
+3. Check that the name is still free (`curl -s -o /dev/null -w '%{http_code}\n'
+   https://pypi.org/pypi/wsq-codec/json` prints 404 while it is) and that the project can be
+   created: a pending publisher does not reserve the name.
+
+A manual run of the `Release` workflow builds the wheels and the source distribution and checks
+them, but never publishes.

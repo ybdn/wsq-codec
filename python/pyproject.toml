@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "wsq-codec"
+description = "Decoder and encoder for WSQ (Wavelet Scalar Quantization) fingerprint images"
+readme = "README.md"
+license = "MIT"
+# A copy of ../LICENSE: maturin cannot read a file above the project, and a copy named LICENSE
+# would clash with the root one in the sdist.
+license-files = ["LICENSE-MIT"]
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.21"]
+keywords = ["wsq", "fingerprint", "biometrics", "image", "codec"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/ybdn-ei/wsq-codec"
+Repository = "https://github.com/ybdn-ei/wsq-codec"
+Changelog = "https://github.com/ybdn-ei/wsq-codec/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ybdn-ei/wsq-codec/issues"
+
+[tool.maturin]
+module-name = "wsq_codec._wsq_codec"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

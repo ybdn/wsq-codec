@@ -143,6 +143,30 @@ the first registration wins). `WsqDecoder` honours `image::Limits`: `max_alloc` 
 8 bytes per pixel, or the image is refused before decoding. `DecodeOptions::max_pixels` is checked
 when the image is read.
 
+## Python
+
+```sh
+pip install wsq-codec
+```
+
+```python
+import numpy as np
+import wsq_codec
+
+pixels = np.full((389, 416), 128, dtype=np.uint8)           # (height, width), uint8
+wsq = wsq_codec.encode(pixels, bitrate=0.75, ppi=500)       # bytes; profile="optimized" too
+image = wsq_codec.decode(wsq)                               # image.pixels: (height, width) uint8
+```
+
+`decode`, `read_info` and `encode` map to the Rust functions, release the GIL, and raise
+`wsq_codec.DecodeError` / `EncodeError` (both `ValueError`, through `wsq_codec.WsqError`) with the
+Rust message; `python/README.md` has the API. The package is built with PyO3 and maturin
+(`python/`), as one `abi3` wheel per platform for CPython 3.9 and later, and `python/tests` runs a
+round trip and compares the conformant output with the NBIS fixtures on Linux, macOS and Windows
+in CI. The PyPI name is `wsq-codec` (import `wsq_codec`): the `wsq` package already on PyPI wraps
+NBIS's C sources and is unrelated. Checked on 2026-11-10: `https://pypi.org/pypi/wsq-codec/json`
+answered 404 (the name was free); `wsq` answered 200.
+
 ## Command line
 
 The `wsq` tool (crate `wsq-cli`, in `cli/`) converts between binary PGM and WSQ. Install it with
