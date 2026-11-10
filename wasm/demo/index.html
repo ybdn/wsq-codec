@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--
+    Nothing the user opens leaves the page: no script, style, font or image comes from another
+    origin, and connect-src 'self' lets the page fetch only its own files (the .wasm module and
+    the sample). The page sends no file, to any origin. 'wasm-unsafe-eval' is what WebAssembly
+    compilation needs; there is no 'unsafe-eval' and no inline script.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; worker-src 'self'; manifest-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>WSQ in your browser</title>
+  <meta name="description" content="Open, convert and inspect WSQ fingerprint images entirely in your browser: nothing is uploaded.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <main>
+    <h1>WSQ in your browser</h1>
+    <p class="lead">Open a <code>.wsq</code> fingerprint image to see it, or convert a PNG or JPEG to WSQ.
+      Powered by <a href="https://github.com/ybdn-ei/wsq-codec">wsq-codec</a>, a pure-Rust codec compiled to WebAssembly.</p>
+
+    <section class="privacy" aria-labelledby="privacy-title">
+      <h2 id="privacy-title">Your files never leave this page</h2>
+      <p>Everything runs in your browser. <strong>No file is uploaded</strong> and nothing is sent
+        to any server: the page makes no request that carries your images, and it enforces that
+        with a Content-Security-Policy that only lets it load its own files. Once loaded, it works
+        offline. Close the tab and your images are gone.</p>
+      <p class="small">It still deserves care: fingerprints are biometric data. Prefer synthetic
+        or test images when you can. The sample files here are synthetic.</p>
+    </section>
+
+    <p id="loading" role="status">Loading the codec&hellip;</p>
+    <p id="fatal" class="error" role="alert" hidden></p>
+
+    <div class="cards">
+      <section class="card" id="decode-card" aria-labelledby="decode-title">
+        <h2 id="decode-title">WSQ to image</h2>
+        <div class="row">
+          <label class="file">Choose a .wsq file
+            <input type="file" id="wsq-file" accept=".wsq,.wsq1,application/octet-stream" disabled></label>
+          <button type="button" id="wsq-sample" class="secondary" disabled>Use the sample</button>
+        </div>
+        <p class="small">or drop a file on this card.</p>
+        <p id="decode-status" class="status" role="status"></p>
+        <div id="decode-result" hidden>
+          <canvas id="decode-canvas" aria-label="Decoded image"></canvas>
+          <dl id="decode-info"></dl>
+          <div class="row">
+            <button type="button" id="save-png">Download PNG</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="encode-card" aria-labelledby="encode-title">
+        <h2 id="encode-title">Image to WSQ</h2>
+        <div class="row">
+          <label class="file">Choose a PNG or JPEG
+            <input type="file" id="image-file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" disabled></label>
+          <button type="button" id="image-sample" class="secondary" disabled>Use the sample</button>
+        </div>
+        <p class="small">or drop an image on this card. It is converted to 8-bit grayscale
+          (transparency over white); both sides must be at least 81 pixels.</p>
+        <p id="encode-status" class="status" role="status"></p>
+
+        <form id="encode-form" hidden>
+          <canvas id="source-canvas" aria-label="Source image in grayscale"></canvas>
+          <p id="source-info" class="small"></p>
+          <div class="grid">
+            <label>Bit rate (bits per pixel)
+              <input type="number" id="bitrate" min="0.05" max="8" step="0.05" value="0.75" required>
+            </label>
+            <label>Resolution (ppi, blank for none)
+              <input type="number" id="ppi" min="1" max="100000" step="1" value="500">
+            </label>
+            <label>Profile
+              <select id="profile">
+                <option value="conformant">conformant (as NIST's reference)</option>
+                <option value="optimized">optimized (meets the size, never certified)</option>
+              </select>
+            </label>
+            <label>Comment (optional)
+              <input type="text" id="comment" maxlength="200" autocomplete="off">
+            </label>
+          </div>
+          <div class="row">
+            <button type="submit" id="encode-button">Encode to WSQ</button>
+          </div>
+        </form>
+
+        <div id="encode-result" hidden>
+          <dl id="encode-info"></dl>
+          <div class="row">
+            <a id="download" class="button" download="image.wsq" href="#">Download .wsq</a>
+          </div>
+          <p class="small">Preview of the WSQ file, decoded back:</p>
+          <canvas id="roundtrip-canvas" aria-label="The encoded image, decoded again"></canvas>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      <p>
+        <a href="https://github.com/ybdn-ei/wsq-codec">Source</a> &middot;
+        <a href="https://www.npmjs.com/package/wsq-codec">npm package</a> &middot;
+        <a href="https://crates.io/crates/wsq-codec">Rust crate</a> &middot; MIT license.
+        Codec <span id="version"></span>.
+      </p>
+      <p class="small">The default (conformant) profile follows the NIST reference encoder. This page is a demo,
+        not a certified WSQ implementation.</p>
+    </footer>
+  </main>
+</body>
+</html>
