@@ -532,12 +532,10 @@ mod tests {
         let values = [0.0, 2.0, -2.5, 2.5, 5.5, 1e9, -1e9, -5.0, -2.0];
         let want: [i16; 9] = [0, 0, -1, 1, 2, i16::MAX, i16::MIN, -2, 0];
         let data = image(|x, y| {
-            let i = (y - node.y) * node.lenx + (x - node.x);
-            if (node.x..node.x + node.lenx).contains(&x)
-                && (node.y..node.y + node.leny).contains(&y)
-                && i < values.len()
-            {
-                values[i]
+            let inside = (node.x..node.x + node.lenx).contains(&x)
+                && (node.y..node.y + node.leny).contains(&y);
+            if inside {
+                values[(y - node.y) * node.lenx + (x - node.x)]
             } else {
                 0.0
             }
