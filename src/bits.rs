@@ -50,6 +50,11 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Starts reading entropy-coded data at the current position.
+    /// The bytes not read yet.
+    pub fn rest(&self) -> &'a [u8] {
+        &self.data[self.pos.min(self.data.len())..]
+    }
+
     pub fn bits(&mut self) -> BitReader<'_, 'a> {
         BitReader {
             bytes: self,

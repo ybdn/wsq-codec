@@ -11,8 +11,7 @@
 //! The table also gives a hash of each encoded stream. Speeding the codec
 //! up must not change it, whatever THREADS is: `--check` compares the
 //! hashes with `benches/hashes.txt` and fails on a difference. The test
-//! images use `sin`, so the hashes hold for the platform that recorded
-//! them (Apple silicon, here) and for others whose `sin` rounds alike.
+//! images use integer arithmetic only, so the hashes hold on every platform.
 
 use std::error::Error;
 use std::time::{Duration, Instant};
@@ -20,17 +19,23 @@ use std::{env, process};
 
 use wsq_codec::{DecodeOptions, EncodeOptions};
 
-/// Curved ridges with some noise, as in the tests.
+/// Curved ridges with some noise, as in the tests. Integer arithmetic only,
+/// so that the image is the same on every platform.
 fn ridges(w: usize, h: usize) -> Vec<u8> {
+    // Triangle wave of the given period (a multiple of 2), from 0 to period / 2.
+    fn triangle(p: usize, period: usize) -> usize {
+        (p % period).abs_diff(period / 2)
+    }
     let mut state = 12345u32;
+    let (cx, cy) = (w / 2, h * 6 / 10);
     (0..w * h)
         .map(|i| {
-            let (x, y) = ((i % w) as f32, (i / w) as f32);
+            let (x, y) = (i % w, i / w);
             state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            let r = ((x - w as f32 / 2.0).powi(2) + (y - h as f32 * 0.6).powi(2)).sqrt();
-            let v =
-                128.0 + 90.0 * (r / 3.0 + (x / 41.0).sin()).sin() + f32::from((state >> 28) as u8);
-            v.clamp(0.0, 255.0) as u8
+            let (dx, dy) = (x.abs_diff(cx) as u64, y.abs_diff(cy) as u64);
+            let r = (dx * dx + dy * dy).isqrt() as usize;
+            let phase = r / 3 + 4 * triangle(x / 5, 16);
+            (40 + 6 * triangle(phase, 64) + (state >> 28) as usize) as u8
         })
         .collect()
 }

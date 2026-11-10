@@ -1,5 +1,6 @@
 use wsq_codec::{
-    DecodeError, DecodeOptions, EncodeError, EncodeOptions, decode, decode_with, encode, read_info,
+    DecodeError, DecodeOptions, Decoder, EncodeError, EncodeOptions, Encoder, decode, decode_into,
+    decode_with, encode, read_info,
 };
 
 /// A fingerprint-like image: curved ridges with some noise.
@@ -92,7 +93,11 @@ fn metadata() {
     assert_eq!(info.comments.len(), 3);
     assert!(info.comments[0].starts_with(b"NIST_COM "));
     assert_eq!(info.comments[1..], options.comments[..]);
-    assert_eq!(decode(&wsq).unwrap().ppi, Some(1000));
+    // One `decode` call gives the pixels and all the metadata.
+    let image = decode(&wsq).unwrap();
+    assert_eq!(image.ppi, info.ppi);
+    assert_eq!(image.software, 0x1234);
+    assert_eq!(image.comments, info.comments);
 }
 
 #[test]
@@ -249,5 +254,135 @@ fn corrupted_streams_do_not_panic() {
             assert_eq!(image.pixels.len(), image.width * image.height);
         }
         let _ = read_info(&data);
+    }
+}
+
+#[test]
+fn reused_buffers_do_not_change_the_output() {
+    // Larger, then smaller, then larger again, so that the kept buffers
+    // hold samples of an earlier image.
+    let sizes = [(300, 280), (120, 97), (1031, 777), (300, 280)];
+    for threads in [1, 3] {
+        let mut encoder = Encoder::new(EncodeOptions::default().with_threads(threads));
+        let mut decoder = Decoder::new(DecodeOptions::default().with_threads(threads));
+        for (w, h) in sizes {
+            let pixels = ridges(w, h);
+            let wsq = encode(&pixels, w, h, &EncodeOptions::default()).unwrap();
+            assert_eq!(encoder.encode(&pixels, w, h).unwrap(), wsq);
+            let image = decode(&wsq).unwrap();
+            assert_eq!(decoder.decode(&wsq).unwrap(), image);
+            let mut out = vec![0x55; w * h];
+            let info = decoder.decode_into(&wsq, &mut out).unwrap();
+            assert_eq!((info.width, info.height), (w, h));
+            assert_eq!(out, image.pixels);
+            let mut out = vec![0; w * h];
+            decode_into(&wsq, &DecodeOptions::default(), &mut out).unwrap();
+            assert_eq!(out, image.pixels);
+        }
+    }
+}
+
+#[test]
+fn decode_into_checks_the_buffer_size() {
+    let wsq = sample();
+    let info = read_info(&wsq).unwrap();
+    let mut out = vec![0; info.width * info.height + 1];
+    assert_eq!(
+        decode_into(&wsq, &DecodeOptions::default(), &mut out),
+        Err(DecodeError::OutputSize {
+            expected: info.width * info.height,
+            actual: out.len()
+        })
+    );
+}
+
+/// The experimental encoder of #42: the stream lands just below the requested size.
+mod at_rate {
+    use super::*;
+    use wsq_codec::experimental::{RATE_TOLERANCE, encode_at_rate};
+
+    fn target(w: usize, h: usize, bitrate: f32) -> f64 {
+        f64::from(bitrate) * (w * h) as f64 / 8.0
+    }
+
+    #[test]
+    fn hits_the_requested_rate() {
+        let (w, h) = (416, 389);
+        let pixels = ridges(w, h);
+        for bitrate in [0.75, 2.25] {
+            let options = EncodeOptions::default().with_bitrate(bitrate);
+            let wsq = encode_at_rate(&pixels, w, h, &options).unwrap();
+            let target = target(w, h, bitrate);
+            let len = wsq.len() as f64;
+            assert!(len <= target, "{bitrate}: {len} > {target}");
+            assert!(len >= target * (1.0 - RATE_TOLERANCE), "{bitrate}: {len}");
+            let image = decode(&wsq).unwrap();
+            assert_eq!((image.width, image.height), (w, h));
+            // Same layout and tables as the conformant encoder: as good at equal size.
+            let conformant = encode(&pixels, w, h, &options).unwrap();
+            assert_ne!(wsq, conformant);
+            assert!(psnr(&pixels, &image.pixels) > 30.0);
+        }
+    }
+
+    #[test]
+    fn threads_do_not_change_the_output() {
+        let (w, h) = (640, 480);
+        let pixels = ridges(w, h);
+        let options = EncodeOptions::default().with_bitrate(1.0);
+        let one = encode_at_rate(&pixels, w, h, &options).unwrap();
+        for threads in [0, 2, 3, 8] {
+            let many = encode_at_rate(&pixels, w, h, &options.clone().with_threads(threads));
+            assert_eq!(many.unwrap(), one, "{threads} threads");
+        }
+    }
+
+    #[test]
+    fn never_writes_an_implementation_number() {
+        let (w, h) = (200, 180);
+        let options = EncodeOptions::default()
+            .with_software(1234)
+            .with_ppi(Some(500));
+        let wsq = encode_at_rate(&ridges(w, h), w, h, &options).unwrap();
+        let info = read_info(&wsq).unwrap();
+        assert_eq!(info.software, 0);
+        assert_eq!(info.ppi, Some(500));
+        let conformant = encode(&ridges(w, h), w, h, &options).unwrap();
+        assert_eq!(read_info(&conformant).unwrap().software, 1234);
+    }
+
+    #[test]
+    fn unreachable_rates_give_the_nearest_stream() {
+        let (w, h) = (200, 180);
+        let pixels = ridges(w, h);
+        // Far above what the image can spend: the longest stream, still under the target.
+        let options = EncodeOptions::default().with_bitrate(40.0);
+        let wsq = encode_at_rate(&pixels, w, h, &options).unwrap();
+        assert!((wsq.len() as f64) < target(w, h, 40.0));
+        assert!(wsq.len() >= encode(&pixels, w, h, &options).unwrap().len());
+        // Far below: the shortest stream the quantization table allows.
+        let options = EncodeOptions::default().with_bitrate(0.001);
+        let wsq = encode_at_rate(&pixels, w, h, &options).unwrap();
+        assert!((wsq.len() as f64) > target(w, h, 0.001));
+        assert_eq!(decode(&wsq).unwrap().pixels.len(), w * h);
+        // A flat image has nothing to spend bits on.
+        let wsq = encode_at_rate(&vec![77; w * h], w, h, &EncodeOptions::default()).unwrap();
+        assert!(decode(&wsq).unwrap().pixels.iter().all(|&p| p == 77));
+    }
+
+    #[test]
+    fn rejects_what_encode_rejects() {
+        let options = EncodeOptions::default().with_bitrate(-1.0);
+        assert_eq!(
+            encode_at_rate(&[0; 100 * 100], 100, 100, &options),
+            Err(EncodeError::InvalidBitrate(-1.0))
+        );
+        assert_eq!(
+            encode_at_rate(&[0; 80 * 100], 80, 100, &EncodeOptions::default()),
+            Err(EncodeError::InvalidDimensions {
+                width: 80,
+                height: 100
+            })
+        );
     }
 }
