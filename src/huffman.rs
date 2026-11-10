@@ -15,6 +15,7 @@
 
 use crate::bits::{Bit, BitReader, BitWriter};
 use crate::error::DecodeError;
+use crate::mem::OutOfMemory;
 
 /// Longest code length.
 pub(crate) const MAX_HUFFBITS: usize = 16;
@@ -241,7 +242,9 @@ impl EncodeTable {
     }
 
     /// Appends the entropy-coded `coeffs`, padded to a byte, to `out`.
-    pub fn compress(&self, coeffs: &[i16], out: &mut Vec<u8>) {
+    /// `out` grows fallibly; reserving the expected size first spares it
+    /// the doubling.
+    pub fn compress(&self, coeffs: &[i16], out: &mut Vec<u8>) -> Result<(), OutOfMemory> {
         let mut w = BitWriter::new(out);
         for_each_symbol(coeffs, |sym, extra, extra_bits| {
             let (code, size) = self.codes[usize::from(sym)];
@@ -249,7 +252,7 @@ impl EncodeTable {
             w.put(code, size);
             w.put(extra, extra_bits);
         });
-        w.flush();
+        w.flush()
     }
 }
 
@@ -390,7 +393,7 @@ mod tests {
         count_symbols(coeffs, &mut counts);
         let spec = HuffmanSpec::from_counts(&counts);
         let mut out = Vec::new();
-        EncodeTable::new(&spec).compress(coeffs, &mut out);
+        EncodeTable::new(&spec).compress(coeffs, &mut out).unwrap();
         out.extend_from_slice(&[0xFF, 0xA1]);
 
         let table = DecodeTable::new(&spec).unwrap();

@@ -59,10 +59,16 @@ returns the same metadata (`ppi`, `software`, `comments`) with the pixels.
 about 8 bytes per pixel at its peak (787 MiB measured for a 10000 by 10000 image on Linux
 x86-64). A stream of under 1 KB can declare such an image, so on untrusted input keep the limit
 low. For ANSI/NIST transactions, call `read_info` first and compare the dimensions with the
-record's own fields, or derive `max_pixels` from them. The image-sized buffers are allocated
-fallibly: when one cannot be, `decode_with` and `encode` return `OutOfMemory` instead of
+record's own fields, or derive `max_pixels` from them. Every buffer whose size follows the
+pixel count is allocated fallibly: the coefficients, the transformed image and its scratch
+buffer, the output pixels, the encoder's compressed output (reserved from the expected size,
+then grown with `try_reserve`) and the wavelet transform's transposition blocks (on every
+thread). When one cannot be, `decode_with` and `encode` return `OutOfMemory` instead of
 aborting, and `decode_with` does the same on a 32-bit target for a size beyond its address
-space, even with `max_pixels: None`.
+space, even with `max_pixels: None`. What stays infallible is small and does not follow the
+pixel count: tables of fixed size, the comments you give, vectors with one entry per row or
+per subband (at most 65535 rows), and the wavelet filters' per-line plans (a few MiB at the
+largest dimension). `src/mem.rs` documents the `grep` that lists them.
 
 The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choice for 500 ppi
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.

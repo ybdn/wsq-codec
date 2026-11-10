@@ -1,10 +1,16 @@
 use crate::error::EncodeError;
 use crate::huffman::{self, EncodeTable, HuffmanSpec};
+use crate::mem::{self, OutOfMemory};
 use crate::quant::{self, QuantParams};
 use crate::tables::{self, EOI, FrameHeader, SOI};
 use crate::tree::{NUM_SUBBANDS, START_SUBBAND_2, START_SUBBAND_3, Trees};
 use crate::wavelet::{self, HIFILT, LOFILT};
 use crate::{EncodeOptions, Profile, math, nistcom, par};
+
+/// More than the bytes of the tables of a stream beside its comments and
+/// entropy-coded blocks: the transform, quantization and Huffman tables, the
+/// frame header, the block headers and the markers add up to about 1 KB.
+const SLACK: usize = 2048;
 
 /// Smallest width and height the encoder accepts. Below it some subbands
 /// are too small for the variance estimate that drives quantization.
@@ -93,7 +99,7 @@ pub(crate) fn encode(
     let (m_shift, r_scale) = normalize(pixels, &mut data, threads);
     let trees = Trees::new(width, height);
     let mut tmp = scratch.tmp.rows(width, height, threads)?;
-    wavelet::decompose(&mut data, &mut tmp, &trees.w, threads);
+    wavelet::decompose(&mut data, &mut tmp, &trees.w, threads)?;
     drop(tmp);
     scratch.tmp.release(scratch.keep);
 
@@ -138,12 +144,15 @@ pub(crate) fn encode(
 /// The start of a stream, the same whatever the bin widths: start of image,
 /// comments and transform table.
 fn header(width: usize, height: usize, options: &EncodeOptions) -> Result<Vec<u8>, EncodeError> {
-    let mut out = Vec::new();
-    out.extend_from_slice(&SOI.to_be_bytes());
     // The first NISTCOM comment the caller gives is merged into ours.
     let merged = options.comments.iter().position(|c| nistcom::is_nistcom(c));
     let base = merged.map(|i| options.comments[i].as_slice());
     let nist = nistcom::build(width, height, options.ppi, options.bitrate, base);
+    // Start of image, a comment segment per comment, the transform table.
+    let comments: usize = options.comments.iter().map(|c| c.len() + 4).sum();
+    let mut out = Vec::new();
+    mem::reserve(&mut out, SLACK + nist.len() + comments)?;
+    out.extend_from_slice(&SOI.to_be_bytes());
     tables::write_comment(&mut out, &nist)?;
     for (i, comment) in options.comments.iter().enumerate() {
         if Some(i) != merged {
@@ -212,10 +221,17 @@ impl Stream<'_> {
         }
         let spec2 = HuffmanSpec::from_counts(&counts);
         let (table1, table2) = (EncodeTable::new(&spec1), EncodeTable::new(&spec2));
-        let compress = |table: &EncodeTable, block: &[i16]| {
+        // Each block gets its share of the stream's expected size, which is
+        // the target rate, but never more than a byte per coefficient. The
+        // blocks grow past it if they must, fallibly.
+        let pixels = usize::from(self.frame.width) * usize::from(self.frame.height);
+        let expected = (f64::from(self.bitrate) / 8.0 * pixels as f64).min(coeffs.len() as f64);
+        let compress = |table: &EncodeTable, block: &[i16]| -> Result<Vec<u8>, OutOfMemory> {
+            let share = expected * block.len() as f64 / coeffs.len().max(1) as f64;
             let mut data = Vec::new();
-            table.compress(block, &mut data);
-            data
+            mem::grow_output(&mut data, share as usize)?;
+            table.compress(block, &mut data)?;
+            Ok(data)
         };
         let (data1, data2, data3) = par::run3(
             parallel,
@@ -223,6 +239,8 @@ impl Stream<'_> {
             || compress(&table2, block2),
             || compress(&table2, block3),
         );
+        let (data1, data2, data3) = (data1?, data2?, data3?);
+        mem::grow_output(out, SLACK + data1.len() + data2.len() + data3.len())?;
 
         tables::write_huffman_table(out, 0, &spec1);
         tables::write_block_header(out, 0);
@@ -288,7 +306,8 @@ impl Search<'_> {
             &params,
             self.stream.threads,
         )?;
-        let mut out = self.head.to_vec();
+        let mut out = mem::with_capacity(self.head.len())?;
+        out.extend_from_slice(self.head);
         match self.stream.write(&mut out, &coeffs, &params) {
             Ok(()) => {}
             Err(e @ EncodeError::BitrateTooLow(_)) => {
@@ -539,5 +558,122 @@ mod tests {
         let one = enc(101, 97, &EncodeOptions::default()).unwrap();
         let four = enc(101, 97, &EncodeOptions::default().with_threads(4)).unwrap();
         assert!(one == four);
+    }
+}
+
+#[cfg(test)]
+mod alloc_tests {
+    use crate::mem::inject::{Site, refusing};
+    use crate::{DecodeError, DecodeOptions, EncodeError, EncodeOptions, decode_with, encode};
+
+    /// A synthetic image of integer arithmetic only.
+    fn pixels(w: usize, h: usize) -> Vec<u8> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                (((x * 7 + y * 3) % 61) * 4 + (x * y) % 13) as u8
+            })
+            .collect()
+    }
+
+    /// Refuses the allocations at `site`, after letting 0, 1, 2... of them
+    /// through, until `run` succeeds: every refusal must come out as an
+    /// error, and the first success must be the unhindered result. Returns
+    /// how many allocations `run` makes at `site`.
+    fn every_refusal<T: PartialEq + std::fmt::Debug, E: std::fmt::Debug>(
+        site: Site,
+        expected: &T,
+        is_oom: impl Fn(&E) -> bool,
+        run: impl Fn() -> Result<T, E>,
+    ) -> usize {
+        for allowed in 0.. {
+            match refusing(site, allowed, &run) {
+                Err(e) => assert!(is_oom(&e), "{site:?} after {allowed}: {e:?}"),
+                Ok(out) => {
+                    assert_eq!(&out, expected);
+                    return allowed;
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    #[test]
+    fn encoder_output_allocations_are_fallible() {
+        let (w, h) = (96, 90);
+        let px = pixels(w, h);
+        let options = EncodeOptions::default().with_comment(b"a comment".to_vec());
+        let expected = encode(&px, w, h, &options).unwrap();
+        let count = every_refusal(
+            Site::EncodeOutput,
+            &expected,
+            |e| *e == EncodeError::OutOfMemory,
+            || encode(&px, w, h, &options),
+        );
+        // The stream, and each of its three blocks; more as they grow.
+        assert!(count >= 4, "{count}");
+    }
+
+    #[test]
+    fn rate_search_output_allocations_are_fallible() {
+        let (w, h) = (96, 90);
+        let px = pixels(w, h);
+        let options = EncodeOptions::default();
+        let expected = crate::experimental::encode_at_rate(&px, w, h, &options).unwrap();
+        for allowed in [0, 1, 4, 5, 9] {
+            let out = refusing(Site::EncodeOutput, allowed, || {
+                crate::experimental::encode_at_rate(&px, w, h, &options)
+            });
+            assert_eq!(out, Err(EncodeError::OutOfMemory), "after {allowed}");
+        }
+        assert_eq!(
+            crate::experimental::encode_at_rate(&px, w, h, &options).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn transposition_allocations_are_fallible_on_one_thread() {
+        let (w, h) = (96, 90);
+        let px = pixels(w, h);
+        let options = EncodeOptions::default();
+        let wsq = encode(&px, w, h, &options).unwrap();
+        let image = crate::decode(&wsq).unwrap();
+        let count = every_refusal(
+            Site::Transposition,
+            &wsq,
+            |e| *e == EncodeError::OutOfMemory,
+            || encode(&px, w, h, &options),
+        );
+        assert!(count > 2, "{count}");
+        every_refusal(
+            Site::Transposition,
+            &image,
+            |e| *e == DecodeError::OutOfMemory,
+            || decode_with(&wsq, &DecodeOptions::default()),
+        );
+    }
+
+    #[test]
+    fn transposition_allocations_are_fallible_on_several_threads() {
+        // Large enough for the transform to split its passes over threads.
+        let (w, h) = (512, 400);
+        let px = pixels(w, h);
+        let options = EncodeOptions::default().with_threads(4);
+        let wsq = encode(&px, w, h, &options).unwrap();
+        let decode_options = DecodeOptions::default().with_threads(4);
+        let image = decode_with(&wsq, &decode_options).unwrap();
+        // Refusing from the start, or after any number of blocks, in the
+        // middle of a pass or between two: the threads must all get out.
+        for allowed in [0, 1, 2, 7, 20, 41] {
+            let out = refusing(Site::Transposition, allowed, || encode(&px, w, h, &options));
+            assert_eq!(out, Err(EncodeError::OutOfMemory), "encode after {allowed}");
+            let out = refusing(Site::Transposition, allowed, || {
+                decode_with(&wsq, &decode_options)
+            });
+            assert_eq!(out, Err(DecodeError::OutOfMemory), "decode after {allowed}");
+        }
+        assert_eq!(encode(&px, w, h, &options).unwrap(), wsq);
+        assert_eq!(decode_with(&wsq, &decode_options).unwrap(), image);
     }
 }

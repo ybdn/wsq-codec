@@ -130,7 +130,8 @@ pub enum EncodeError {
     /// [`Optimized`](crate::Profile::Optimized) profile. Only a conformant
     /// stream may carry an implementation number the FBI assigned.
     SoftwareRequiresConformant(u16),
-    /// The memory the encoder needs for the image could not be allocated.
+    /// The memory the encoder needs for the image could not be allocated:
+    /// its buffers, the wavelet transform's blocks or the compressed output.
     OutOfMemory,
 }
 

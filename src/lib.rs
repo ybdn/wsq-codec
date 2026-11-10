@@ -124,7 +124,8 @@ pub struct DecodeOptions {
     /// (measured on Linux x86-64, one thread). The limit is therefore the
     /// only defense against a stream that is cheap to send and costly to
     /// decode. When the buffers cannot be allocated, or are larger than the
-    /// address space of a 32-bit target, decoding fails with
+    /// address space of a 32-bit target, or the wavelet transform cannot
+    /// allocate its working blocks, decoding fails with
     /// [`DecodeError::OutOfMemory`] instead of aborting or panicking.
     ///
     /// For ANSI/NIST transactions, call [`read_info`] first and compare the

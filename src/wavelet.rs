@@ -8,6 +8,7 @@
 //! recorded once per line length as a [`Plan`], which then filters many
 //! rows or columns side by side.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, RwLock, mpsc};
 
 use crate::mem::{self, OutOfMemory};
@@ -153,12 +154,13 @@ impl Plan {
     /// `r`, both [`len`](Self::len) samples long.
     ///
     /// Rows go through [`apply_columns`](Self::apply_columns) in blocks,
-    /// transposed, which filters them side by side.
-    fn apply_rows(&self, src: &[&[f32]], dst: &mut [&mut [f32]]) {
+    /// transposed, which filters them side by side. The two blocks, of
+    /// `len` by 64 samples each, are allocated fallibly.
+    fn apply_rows(&self, src: &[&[f32]], dst: &mut [&mut [f32]]) -> Result<(), OutOfMemory> {
         const BLOCK: usize = 64;
         let n = self.len;
-        let mut tin = vec![0.0f32; n * BLOCK];
-        let mut tout = vec![0.0f32; n * BLOCK];
+        let mut tin = mem::transposition_block(n * BLOCK)?;
+        let mut tout = mem::transposition_block(n * BLOCK)?;
         for (src, dst) in src.chunks(BLOCK).zip(dst.chunks_mut(BLOCK)) {
             let count = src.len();
             // Transposing a sample of every row at a time keeps the rows
@@ -180,6 +182,7 @@ impl Plan {
                 }
             }
         }
+        Ok(())
     }
 
     /// Filters columns side by side: `src[k]` holds sample `k` of every
@@ -667,7 +670,17 @@ fn lock_rows<'a>(rows: &'a mut [&mut [f32]]) -> Vec<RwLock<&'a mut [f32]>> {
 /// share of the output rows from all the input rows. Either way each
 /// output sample goes through the same products and sums as on a single
 /// thread.
-fn run(passes: &[Pass], data: &mut [&mut [f32]], tmp: &mut [&mut [f32]], threads: usize) {
+///
+/// Fails if a thread could not allocate its transposition blocks. The
+/// threads then skip the passes left, but still wait for each other
+/// between them, so that none is left waiting; `data` and `tmp` hold
+/// nothing meaningful after that.
+fn run(
+    passes: &[Pass],
+    data: &mut [&mut [f32]],
+    tmp: &mut [&mut [f32]],
+    threads: usize,
+) -> Result<(), OutOfMemory> {
     let wanted = passes
         .iter()
         .map(|p| shares(threads, p.leny, p.lenx))
@@ -675,22 +688,23 @@ fn run(passes: &[Pass], data: &mut [&mut [f32]], tmp: &mut [&mut [f32]], threads
         .unwrap_or(1);
     let image = lock_rows(data);
     let scratch = lock_rows(tmp);
+    let failed = AtomicBool::new(false);
     let work = |id: usize, workers: usize, barrier: Option<&Barrier>| {
         for pass in passes {
-            run_share(
-                pass,
-                id,
-                workers.min(shares(threads, pass.leny, pass.lenx)),
-                &image,
-                &scratch,
-            );
+            if !failed.load(Ordering::Relaxed) {
+                let parts = workers.min(shares(threads, pass.leny, pass.lenx));
+                if run_share(pass, id, parts, &image, &scratch).is_err() {
+                    failed.store(true, Ordering::Relaxed);
+                }
+            }
             if let Some(barrier) = barrier {
                 barrier.wait();
             }
         }
     };
     if wanted <= 1 {
-        return work(0, 1, None);
+        work(0, 1, None);
+        return outcome(&failed);
     }
     std::thread::scope(|scope| {
         // Threads that could be created learn how many there are, and
@@ -717,6 +731,15 @@ fn run(passes: &[Pass], data: &mut [&mut [f32]], tmp: &mut [&mut [f32]], threads
         }
         work(0, workers, Some(&barrier));
     });
+    outcome(&failed)
+}
+
+fn outcome(failed: &AtomicBool) -> Result<(), OutOfMemory> {
+    if failed.load(Ordering::Relaxed) {
+        Err(OutOfMemory)
+    } else {
+        Ok(())
+    }
 }
 
 /// Thread `id`'s share of `pass`, split between `parts` threads.
@@ -726,12 +749,12 @@ fn run_share<'a>(
     parts: usize,
     image: &[RwLock<&'a mut [f32]>],
     scratch: &[RwLock<&'a mut [f32]>],
-) {
+) -> Result<(), OutOfMemory> {
     let size = pass.leny.div_ceil(parts.max(1));
     let first = id * size;
     let last = (first + size).min(pass.leny);
     if first >= last {
-        return;
+        return Ok(());
     }
     let ((src, sx, sy), (dst, dx, dy)) = if pass.to_tmp {
         ((image, pass.x, pass.y), (scratch, 0, 0))
@@ -757,8 +780,9 @@ fn run_share<'a>(
     let mut dst: Vec<&mut [f32]> = dst.iter_mut().map(|row| &mut row[dx..dx + lenx]).collect();
     if pass.columns {
         pass.plan.apply_columns_range(&src, &mut dst, first..last);
+        Ok(())
     } else {
-        pass.plan.apply_rows(&src, &mut dst);
+        pass.plan.apply_rows(&src, &mut dst)
     }
 }
 
@@ -766,12 +790,14 @@ fn run_share<'a>(
 /// at a time, on up to `threads` threads.
 ///
 /// `tmp`, with as many rows as `data`, is scratch space, whatever it holds.
+/// Fails, leaving `data` unusable, if the transform could not allocate its
+/// transposition blocks.
 pub(crate) fn decompose(
     data: &mut [&mut [f32]],
     tmp: &mut [&mut [f32]],
     tree: &[WNode; W_TREE_LEN],
     threads: usize,
-) {
+) -> Result<(), OutOfMemory> {
     let mut passes = Vec::with_capacity(2 * tree.len());
     for node in tree {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
@@ -788,13 +814,13 @@ pub(crate) fn decompose(
             });
         }
     }
-    run(&passes, data, tmp, threads);
+    run(&passes, data, tmp, threads)
 }
 
 /// Inverse transform of the whole image in place, on up to `threads`
 /// threads. `lo` and `hi` are the synthesis filters as read from the
 /// transform table. `tmp`, with as many rows as `data`, is scratch space,
-/// whatever it holds.
+/// whatever it holds. Fails, like [`decompose`], if it could not allocate.
 pub(crate) fn reconstruct(
     data: &mut [&mut [f32]],
     tmp: &mut [&mut [f32]],
@@ -802,7 +828,7 @@ pub(crate) fn reconstruct(
     lo: &[f32],
     hi: &[f32],
     threads: usize,
-) {
+) -> Result<(), OutOfMemory> {
     let mut passes = Vec::with_capacity(2 * tree.len());
     for node in tree.iter().rev() {
         let (x, y, lenx, leny) = (node.x, node.y, node.lenx, node.leny);
@@ -819,5 +845,5 @@ pub(crate) fn reconstruct(
             });
         }
     }
-    run(&passes, data, tmp, threads);
+    run(&passes, data, tmp, threads)
 }

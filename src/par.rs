@@ -57,10 +57,15 @@ where
     let refused = FAIL_SPAWN.with(|flag| flag.get());
     #[cfg(not(test))]
     let refused = false;
+    // Tests that refuse allocations do so on the threads started here too.
+    #[cfg(test)]
+    let injection = crate::mem::inject::current();
     let spawned = if refused {
         Err(std::io::Error::other("thread creation refused"))
     } else {
         Builder::new().spawn_scoped(scope, move || {
+            #[cfg(test)]
+            crate::mem::inject::set(injection);
             let f = job.lock().ok().and_then(|mut f| f.take());
             f.expect("job runs once")()
         })
