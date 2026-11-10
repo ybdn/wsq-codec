@@ -5,9 +5,12 @@
 //! wsq-nbis gen DIR
 //! wsq-nbis encode RAW WIDTH HEIGHT BITRATE PPI THREADS [OUT.wsq]
 //! wsq-nbis decode STREAM.wsq THREADS [OUT.raw]
+//! wsq-nbis pgm2raw IN.pgm OUT.raw
 //! ```
 //!
-//! `gen` writes the synthetic images as 8-bit raw files. `encode` and `decode` do one call,
+//! `gen` writes the synthetic images as 8-bit raw files. `pgm2raw` is for the `WSQ_CORPUS_DIR`
+//! mode of `run.sh`: it writes the pixels of a binary 8-bit PGM and prints `WIDTH HEIGHT`
+//! (and nothing else: the harness never prints a path or a file name from the corpus). `encode` and `decode` do one call,
 //! in memory, and print one line: `ms=… out_bytes=… fnv=… extra_rss_kb=…`. The time is that of
 //! the call alone (file reading and writing excluded). `extra_rss_kb` is the peak resident set
 //! of the process (`VmHWM`) minus the resident set just before the call, so the input
@@ -60,6 +63,45 @@ fn pattern(kind: &str, w: usize, h: usize, seed: u32) -> Vec<u8> {
     out
 }
 
+/// The header of a binary 8-bit PGM (`P5`, comments allowed): width, height and the offset of
+/// the pixels.
+fn parse_pgm(data: &[u8]) -> Result<(usize, usize, usize), Box<dyn Error>> {
+    let mut pos = 0;
+    let mut token = || -> Result<String, Box<dyn Error>> {
+        loop {
+            match data.get(pos) {
+                Some(b'#') => {
+                    while data.get(pos).is_some_and(|&b| b != b'\n') {
+                        pos += 1;
+                    }
+                }
+                Some(b) if b.is_ascii_whitespace() => pos += 1,
+                Some(_) => break,
+                None => return Err("truncated PGM header".into()),
+            }
+        }
+        let start = pos;
+        while data.get(pos).is_some_and(|b| !b.is_ascii_whitespace()) {
+            pos += 1;
+        }
+        Ok(String::from_utf8_lossy(&data[start..pos]).into_owned())
+    };
+    if token()? != "P5" {
+        return Err("not a binary PGM".into());
+    }
+    let (w, h, max): (usize, usize, usize) =
+        (token()?.parse()?, token()?.parse()?, token()?.parse()?);
+    if max != 255 {
+        return Err("not an 8-bit PGM".into());
+    }
+    // A single whitespace byte separates the header from the pixels.
+    let offset = pos + 1;
+    if w == 0 || h == 0 || data.len() < offset + w * h {
+        return Err("bad PGM size".into());
+    }
+    Ok((w, h, offset))
+}
+
 fn fnv1a(data: &[u8]) -> u64 {
     data.iter().fold(0xCBF2_9CE4_8422_2325, |h, &b| {
         (h ^ u64::from(b)).wrapping_mul(0x100_0000_01B3)
@@ -102,6 +144,13 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
+        Some("pgm2raw") if args.len() == 3 => {
+            let data = fs::read(&args[1])?;
+            let (w, h, offset) = parse_pgm(&data)?;
+            fs::write(&args[2], &data[offset..offset + w * h])?;
+            println!("{w} {h}");
+            Ok(())
+        }
         Some("encode") if args.len() == 7 || args.len() == 8 => {
             let pixels = fs::read(&args[1])?;
             let (w, h): (usize, usize) = (args[2].parse()?, args[3].parse()?);
@@ -132,7 +181,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        _ => Err("usage: wsq-nbis gen DIR | encode RAW W H BITRATE PPI THREADS [OUT] | decode WSQ THREADS [OUT]".into()),
+        _ => Err("usage: wsq-nbis gen DIR | encode RAW W H BITRATE PPI THREADS [OUT] | decode WSQ THREADS [OUT] | pgm2raw IN OUT".into()),
     }
 }
 

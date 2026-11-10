@@ -31,6 +31,13 @@
   something to find; images of `WSQ_QUALITY_DIR` are now reported in aggregate only, with no
   file name and no per-file row, and the CSV has six more columns. `docs/quality.md` has the
   build instructions and the first figures, of 10 November 2026, on the synthetic patterns only.
+- Benchmark against NBIS, third version (#68; tooling and documentation only, the codec is unchanged):
+  `bench/nbis-compare` reports medians with 95 % percentile bootstrap intervals (fixed seed), thread
+  scaling at 1, 2, 4 and 8 threads with a verdict, and memory read the same way for NBIS and the
+  crate; a `WSQ_CORPUS_DIR` mode measures a local corpus of real fingerprints and writes aggregates
+  only (never a file name or a per-file row). `docs/nbis-comparison.md` and the README
+  "Performance" section are refreshed with the 10 November 2026 run, whose machine was shared and
+  noisy; the real-corpus run is recorded there as not executed.
 
 ## 0.2.0
 

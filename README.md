@@ -216,28 +216,50 @@ runners (their logs do not state it).
 
 ## Performance
 
-The fastest of 5 runs on generated images, in memory, on a 4-core cloud x86-64 machine
-(`cargo bench --bench codec -- THREADS`):
+Every figure below is a median with its 95 % bootstrap interval, measured by
+[`bench/nbis-compare`](bench/nbis-compare/) on **10 November 2026** on a shared cloud virtual
+machine (Intel Xeon at 2.10 GHz, 4 vCPUs, 16 GB, Linux 6.18 x86-64, rustc 1.97.0, Cargo's `release`
+profile) that other jobs were using while it ran (CPU 54 % busy before the run started, 75 % busy
+during it): the times are noisy and the intervals show how much. One call per process, in memory,
+on generated images (not fingerprints), 0.75 bit/pixel, 500 ppi declared; 31 calls per cell, 11 for
+the 5500×8000 image. Times in ms.
 
 | image | encode, 1 thread | decode, 1 thread | encode, 4 threads | decode, 4 threads |
 |---|---|---|---|---|
-| 500 ppi rolled print, 800×750 | 11 ms | 10 ms | 10 ms | 9 ms |
-| 1000 ppi, 1600×1500 | 43 ms | 38 ms | 23 ms | 19 ms |
-| 1000 ppi palm, 5500×8000 | 1.13 s | 1.06 s | 0.45 s | 0.41 s |
+| 500 ppi rolled print, 800×750 | 14.5 [13.5, 17.4] | 13.8 [12.5, 16.0] | 15.7 [14.8, 17.4] | 14.6 [14.0, 16.6] |
+| 1000 ppi, 1600×1500 | 58.4 [55.1, 59.8] | 55.4 [52.3, 64.4] | 50.2 [46.2, 53.9] | 45.2 [40.3, 48.5] |
+| 1000 ppi palm, 5500×8000 | 1421 [1281, 1501] | 1282 [1237, 1342] | 1055 [732, 1264] | 943 [654, 1059] |
 
-`docs/nbis-comparison.md` compares speed and memory with NBIS 5.0.0 (distributions over repeated
-calls, one process per call, one and four threads), with the protocol, the conditions and the
-limits; `bench/nbis-compare` repeats it. It is a measurement on synthetic images on one machine, not
-a claim for other cases.
+- **Against NBIS 5.0.0** (gcc 13.3, `-O2`, one thread, same calls, same machine, interleaved), at one
+  thread: the crate's median was 0.43 to 0.58 times NBIS's when encoding and 0.33 to 0.39 times when
+  decoding on that run (upper ends of the 95 % intervals: 0.67 and 0.43); a second run the same day,
+  under a heavier load, gave 0.38 to 0.54 and 0.28 to 0.36 (upper ends: 0.78 and 0.49). Both on
+  synthetic images only; see [`docs/nbis-comparison.md`](docs/nbis-comparison.md).
+- **Threads.** A gain was measured only on the 5500×8000 image: against one thread, 1.2 to 1.8 times
+  faster at 2, 4 or 8 threads (95 % interval above 1 in both runs, in 23 of 24 series), far from the
+  four times four cores could give; the earlier run of 4 November 2026 (older codec, more loaded
+  machine) did not show it, so it is a result of two runs, not a settled one. On 1600×1500 images it appeared in the first run and not in the
+  second: **not established**. On 800×750 no gain was measured in either run, and in 7 of the 24
+  series (all at 4 or 8 threads) the threaded calls were measurably slower. The 4-thread columns
+  above must be read with this in mind.
+- **Memory.** The memory a call adds is higher than NBIS's, not lower: at one thread 4 % to 49 %
+  more depending on the image (the smaller the image, the larger the share), more with more threads
+  (up to 2.1 times on the 800×750 image at 8 threads). Both are read the same way (`VmHWM` in
+  `/proc/self/status`). Both need about 8 bytes per pixel at the peak.
+- Not measured: real fingerprints (the harness has a local mode for them, not run yet), other
+  machines, other compilers or NBIS builds, macOS, Windows, ARM.
+
+`cargo bench --bench codec -- THREADS` times the same codec in one process, as the fastest of a few
+runs: it tracks regressions and gives no interval, so its figures are not quoted.
 
 The work stays on the calling thread unless `EncodeOptions::threads` or
 `DecodeOptions::threads` asks for more (0 means one per core). The wavelet transform starts its
 threads once per image and splits every pass by rows; quantization, dequantization and the
 subband statistics are split by subbands or rows, the three Huffman blocks are coded and decoded
 side by side, and the image-sized buffers are allocated in bands, each zeroed by its own thread.
-Each value goes through the same arithmetic either way, so the result is unchanged. Threads pay
-off on large images; on small ones they cost nothing. `Decoder` and `Encoder` keep their buffers
-from one image to the next, which spares a batch of images their allocation.
+Each value goes through the same arithmetic either way, so the result is unchanged. Threads cost
+time on small images and help, by the measure above, only on large ones. `Decoder` and `Encoder`
+keep their buffers from one image to the next, which spares a batch of images their allocation.
 
 ## Quality
 
