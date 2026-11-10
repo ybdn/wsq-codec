@@ -106,6 +106,61 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
       - run: cargo test --release --target i686-unknown-linux-gnu --lib --tests
 
+  # Determinism on a second architecture, executed: the tests (NBIS fixtures
+  # included) and the benchmark's stream hashes on a hosted AArch64 runner.
+  aarch64:
+    name: test (aarch64-unknown-linux-gnu)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Record the runner
+        run: |
+          uname -m
+          rustc -vV
+      - run: cargo test --release --lib --tests
+      - run: cargo bench --bench codec -- 1 1 --check
+      - run: cargo bench --bench codec -- 0 1 --check
+
+  # wasm32 executed, not only built: the tests and the benchmark's stream
+  # hashes under wasmtime. WASI has no threads, so `src/par.rs` runs every job
+  # on the calling thread; the output is the same. `tests/inspect.rs` reads
+  # `tests/data` at run time, hence the `--dir` mapping of the checkout to the
+  # same path inside the guest.
+  wasi:
+    name: test (wasm32-wasip1)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime run --dir ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Built from crates.io at a fixed version with the lockfile it was
+      # published with; rust-cache keeps the binary between runs.
+      - name: Install wasmtime
+        run: command -v wasmtime || cargo install wasmtime-cli --version 50.0.1 --locked
+      - name: Record the runner
+        run: |
+          uname -m
+          rustc -vV
+          wasmtime --version
+      - run: cargo test --release --target wasm32-wasip1 --lib --tests
+      - run: cargo bench --bench codec --target wasm32-wasip1 -- 1 1 --check
+      - run: cargo bench --bench codec --target wasm32-wasip1 -- 0 1 --check
+
   package:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -139,7 +194,7 @@ jobs:
   # The one status to read: green when every needed job passed or was skipped.
   ci:
     if: ${{ !cancelled() }}
-    needs: [changes, core, bench, wasm, i686, package, deny]
+    needs: [changes, core, bench, wasm, i686, aarch64, wasi, package, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

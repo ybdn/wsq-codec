@@ -184,8 +184,13 @@ mod tests {
             std::thread::scope(|s| spawn(s, || std::thread::current().id()).join())
         });
         assert_eq!(id, caller);
+        // WASI has no threads: there `spawn` always falls back, which is the point.
         let id = std::thread::scope(|s| spawn(s, || std::thread::current().id()).join());
-        assert_ne!(id, caller);
+        if cfg!(target_os = "wasi") {
+            assert_eq!(id, caller);
+        } else {
+            assert_ne!(id, caller);
+        }
     }
 
     #[test]
