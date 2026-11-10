@@ -126,10 +126,24 @@ pub(crate) mod inject {
     /// Whether the allocation at `site` that is being made is refused.
     pub(crate) fn refused(site: Site) -> bool {
         current().is_some_and(|i| {
-            i.site == site
-                && i.allowed
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                    .is_err()
+            if i.site != site {
+                return false;
+            }
+            // A compare-and-swap loop: `fetch_update` is deprecated on newer
+            // toolchains and its replacement is above the MSRV.
+            let mut n = i.allowed.load(Ordering::SeqCst);
+            loop {
+                let Some(next) = n.checked_sub(1) else {
+                    return true;
+                };
+                match i
+                    .allowed
+                    .compare_exchange(n, next, Ordering::SeqCst, Ordering::SeqCst)
+                {
+                    Ok(_) => return false,
+                    Err(actual) => n = actual,
+                }
+            }
         })
     }
 
