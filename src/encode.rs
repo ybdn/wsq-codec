@@ -665,13 +665,21 @@ mod alloc_tests {
         let image = decode_with(&wsq, &decode_options).unwrap();
         // Refusing from the start, or after any number of blocks, in the
         // middle of a pass or between two: the threads must all get out.
+        // Where threads cannot be created (WASI), the work runs on the calling
+        // thread and makes fewer allocations: a refusal point past the last
+        // one lets the call succeed, which must then give the usual output.
+        let threads = !cfg!(target_os = "wasi");
         for allowed in [0, 1, 2, 7, 20, 41] {
-            let out = refusing(Site::Transposition, allowed, || encode(&px, w, h, &options));
-            assert_eq!(out, Err(EncodeError::OutOfMemory), "encode after {allowed}");
-            let out = refusing(Site::Transposition, allowed, || {
+            match refusing(Site::Transposition, allowed, || encode(&px, w, h, &options)) {
+                Ok(out) if !threads && allowed > 2 => assert_eq!(out, wsq),
+                out => assert_eq!(out, Err(EncodeError::OutOfMemory), "encode after {allowed}"),
+            }
+            match refusing(Site::Transposition, allowed, || {
                 decode_with(&wsq, &decode_options)
-            });
-            assert_eq!(out, Err(DecodeError::OutOfMemory), "decode after {allowed}");
+            }) {
+                Ok(out) if !threads && allowed > 2 => assert_eq!(out, image),
+                out => assert_eq!(out, Err(DecodeError::OutOfMemory), "decode after {allowed}"),
+            }
         }
         assert_eq!(encode(&px, w, h, &options).unwrap(), wsq);
         assert_eq!(decode_with(&wsq, &decode_options).unwrap(), image);
