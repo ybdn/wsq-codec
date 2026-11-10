@@ -57,8 +57,9 @@ What is written to the work directory:
 - `machine.txt`: CPU, versions and load; it does not mention the corpus.
 
 What is not: the per-call rows (they carry the rank of the file in the sorted list, nothing else) live
-in `$WORKDIR/.corpus-scratch`, which is deleted when the script ends, even on failure, together with
-the raw copy of the pixels. The tools' error messages are discarded. The work directory also holds
+in a private directory that `mktemp -d` creates under `$TMPDIR` (mode 700, not under `$WORKDIR`),
+which is deleted when the script ends, even on failure, together with the list of corpus files and
+the raw copy of the pixels; everything the script writes is owner-only (`umask 077`). The tools' error messages are discarded. The work directory also holds
 the binaries and the build directory: **share `corpus-summary.md` and `machine.txt` only**. Do not
 commit anything else, and never a fingerprint, a stream or a name from the corpus (see
 [CONTRIBUTING.md](../../CONTRIBUTING.md)). Check `corpus-summary.md` once before putting it
