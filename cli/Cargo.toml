@@ -1,6 +1,6 @@
 [package]
 name = "wsq-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Command-line tool for WSQ fingerprint images: encode, decode, inspect and certify"
@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "multimedia::images"]
 
 # Hand-written argument parsing: the tool adds no dependency beyond the codec itself.
 [dependencies]
-wsq-codec = { version = "0.2.0", path = ".." }
+wsq-codec = { version = "1.0.0", path = ".." }
 
 [[bin]]
 name = "wsq"

@@ -149,7 +149,10 @@ keeps improving:
   `Conformant`) and optimized ones (profile `Optimized`, in the same crate since #44), as
   described above. The certificate
   is tied to a version, so it is pursued once the API is frozen for 1.0; the order of the work
-  is in the roadmap, issue #17 of the repository.
+  is in the roadmap, issue #17 of the repository. The API is frozen in 1.0.0 (#45, decisions in
+  `docs/api-1.0.md`): the output of the conformant encoder and the decoded pixels are part of
+  what semantic versioning covers, so a certified version can be named by its number and any
+  change to them is a major release.
 
 ## Platform independence
 

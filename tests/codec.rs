@@ -140,20 +140,22 @@ fn threads_do_not_change_the_output() {
 fn encoder_rejects_bad_input() {
     let opts = EncodeOptions::default();
     let px = vec![0u8; 100 * 100];
-    assert_eq!(
+    assert!(matches!(
         encode(&px[..80 * 100], 80, 100, &opts),
         Err(EncodeError::InvalidDimensions {
             width: 80,
-            height: 100
+            height: 100,
+            ..
         })
-    );
-    assert_eq!(
+    ));
+    assert!(matches!(
         encode(&px, 100, 99, &opts),
         Err(EncodeError::PixelCountMismatch {
             expected: 9900,
-            actual: 10000
+            actual: 10000,
+            ..
         })
-    );
+    ));
     assert!(encode(&vec![0; 70000 * 81], 70000, 81, &opts).is_err());
     for bitrate in [0.0, -1.0, f32::NAN, f32::INFINITY] {
         let opts = EncodeOptions::default().with_bitrate(bitrate);
@@ -204,12 +206,15 @@ fn with_dimensions(wsq: &[u8], width: u16, height: u16) -> Vec<u8> {
 #[test]
 fn oversized_images_are_refused_before_decoding() {
     let huge = with_dimensions(&sample(), 65535, 65535);
-    let too_large = DecodeError::TooLarge {
-        width: 65535,
-        height: 65535,
-        max_pixels: wsq_codec::DEFAULT_MAX_PIXELS,
-    };
-    assert_eq!(decode(&huge), Err(too_large));
+    assert!(matches!(
+        decode(&huge),
+        Err(DecodeError::TooLarge {
+            width: 65535,
+            height: 65535,
+            max_pixels: wsq_codec::DEFAULT_MAX_PIXELS,
+            ..
+        })
+    ));
     // Reading the header alone needs no limit.
     assert_eq!(read_info(&huge).unwrap().width, 65535);
 
@@ -287,13 +292,12 @@ fn decode_into_checks_the_buffer_size() {
     let wsq = sample();
     let info = read_info(&wsq).unwrap();
     let mut out = vec![0; info.width * info.height + 1];
-    assert_eq!(
+    let expected = info.width * info.height;
+    assert!(matches!(
         decode_into(&wsq, &DecodeOptions::default(), &mut out),
-        Err(DecodeError::OutputSize {
-            expected: info.width * info.height,
-            actual: out.len()
-        })
-    );
+        Err(DecodeError::OutputSize { expected: e, actual: a, .. })
+            if e == expected && a == expected + 1
+    ));
 }
 
 /// The `Optimized` profile (#42, #44): the stream lands just below the requested size.
@@ -355,9 +359,6 @@ mod optimized {
         encode_to(&mut written, &pixels, w, h, &options).unwrap();
         assert_eq!(written, wsq);
         assert!((wsq.len() as f64) <= target(w, h, 1.0));
-        // The shorthand of the experimental module is the same encoder.
-        let alias = wsq_codec::experimental::encode_at_rate(&pixels, w, h, &options).unwrap();
-        assert_eq!(alias, wsq);
     }
 
     #[test]
@@ -399,17 +400,6 @@ mod optimized {
     }
 
     #[test]
-    fn the_alias_never_writes_an_implementation_number() {
-        let (w, h) = (200, 180);
-        let options = EncodeOptions::default()
-            .with_software(1234)
-            .with_ppi(Some(500));
-        let wsq = wsq_codec::experimental::encode_at_rate(&ridges(w, h), w, h, &options).unwrap();
-        let info = read_info(&wsq).unwrap();
-        assert_eq!((info.software, info.ppi), (0, Some(500)));
-    }
-
-    #[test]
     fn unreachable_rates_give_the_nearest_stream() {
         let (w, h) = (200, 180);
         let pixels = ridges(w, h);
@@ -436,13 +426,14 @@ mod optimized {
             encode(&[0; 100 * 100], 100, 100, &options),
             Err(EncodeError::InvalidBitrate(-1.0))
         );
-        assert_eq!(
+        assert!(matches!(
             encode(&[0; 80 * 100], 80, 100, &optimized()),
             Err(EncodeError::InvalidDimensions {
                 width: 80,
-                height: 100
+                height: 100,
+                ..
             })
-        );
+        ));
         assert_eq!(
             encode(&[0; 100 * 100], 100, 100, &optimized().with_ppi(Some(0))),
             Err(EncodeError::InvalidPpi)

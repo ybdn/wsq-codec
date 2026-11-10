@@ -175,6 +175,31 @@ jobs:
       - run: cargo clippy -p wsq-cli --all-targets -- -D warnings
       - run: cargo package
 
+  # The public API is frozen from 1.0 (docs/api-1.0.md). The baseline is the latest release on
+  # crates.io, the default: cargo-semver-checks takes the kind of release from the difference
+  # between that version and the one in Cargo.toml. While 1.0.0 is unpublished the baseline is
+  # 0.2.0 and the breaking changes of 1.0 are allowed; once 1.0.0 is out, a pull request that
+  # breaks the API fails here unless it also raises the major version. All features are
+  # checked: the `image` feature's API is public too.
+  # Built from crates.io at a fixed version with its lockfile; rust-cache keeps the binary
+  # between runs. Raise the version when a stable release changes the rustdoc JSON format
+  # and the job reports it cannot read it.
+  semver:
+    name: cargo-semver-checks
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install cargo-semver-checks
+        run: command -v cargo-semver-checks || cargo install cargo-semver-checks --version 0.51.0 --locked
+      - run: cargo semver-checks check-release -p wsq-codec --all-features
+
   deny:
     name: cargo-deny
     needs: changes
@@ -194,7 +219,7 @@ jobs:
   # The one status to read: green when every needed job passed or was skipped.
   ci:
     if: ${{ !cancelled() }}
-    needs: [changes, core, bench, wasm, i686, aarch64, wasi, package, deny]
+    needs: [changes, core, bench, wasm, i686, aarch64, wasi, package, semver, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

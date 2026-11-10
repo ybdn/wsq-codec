@@ -104,3 +104,18 @@ fn image_limits_refuse_large_images_before_decoding() {
         image::ImageError::Limits(_)
     ));
 }
+
+#[test]
+fn the_decoder_is_debug_without_dumping_the_stream() {
+    fn send_sync<T: Send + Sync>() {}
+    send_sync::<WsqDecoder>();
+    let wsq = encode_gray_image(&sample(), &EncodeOptions::default()).unwrap();
+    let decoder = WsqDecoder::new(&wsq[..]).unwrap();
+    let text = format!("{decoder:?}");
+    assert!(text.starts_with("WsqDecoder"), "{text}");
+    assert!(
+        text.contains(&format!("stream_len: {}", wsq.len())),
+        "{text}"
+    );
+    assert_eq!(decoder.info(), &wsq_codec::read_info(&wsq).unwrap());
+}

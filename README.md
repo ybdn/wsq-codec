@@ -32,6 +32,11 @@ carry in Types 4 and 14.
 
 ## Usage
 
+```toml
+[dependencies]
+wsq-codec = "1"
+```
+
 ```rust
 use wsq_codec::{EncodeOptions, decode, encode};
 
@@ -100,6 +105,30 @@ let options = EncodeOptions::default()
 
 `Profile` is `#[non_exhaustive]`, so that a target quality can join later.
 
+### Dimensions
+
+Widths and heights are `usize`, but the format stores them in 16 bits: `wsq_codec::MAX_DIMENSION`
+is 65535, and every `Image` and `Info` stays within it. `encode` also needs both dimensions to be
+at least `wsq_codec::MIN_ENCODE_DIMENSION` (81).
+
+### Errors
+
+`DecodeError` and `EncodeError` (also `Clone` and `PartialEq`, the first `Eq` and `Hash` too)
+are what `decode*`, `read_info`, `encode` and `Encoder` return. `decode_from` returns a
+`ReadError` and `encode_to` a `WriteError`, which add an `Io` variant for the reader or writer.
+All four are `#[non_exhaustive]`, `Send + Sync`, and implement `std::error::Error`. Match on
+the variants, with `..` in struct variants (`DecodeError::TooLarge { max_pixels, .. }`), not on
+the text of the messages.
+
+### Stability
+
+From 1.0 the public API follows [semantic versioning](https://semver.org), and CI runs
+`cargo-semver-checks` against the last release. The decoded pixels and the conformant encoder's
+bytes are covered too; the bytes of the `Optimized` profile, error message texts and `Debug`
+output are not. The MSRV (1.85) rises in a minor release, never in a patch release. The `image`
+feature is tied to `image` 0.25. [docs/api-1.0.md](docs/api-1.0.md) records the review behind
+the 1.0 API.
+
 With the `image` feature (off by default, the only dependency the crate can pull), decoded
 images convert into `image::GrayImage` (`TryFrom`), `wsq_codec::image::encode_gray_image` encodes one, and
 `wsq_codec::image::register_hooks()` lets the `image` crate open `.wsq` files itself:
@@ -111,7 +140,8 @@ let gray = image::open("finger.wsq")?.to_luma8();
 
 `register_hooks_with(DecodeOptions)` sets the options the hooks decode with (the hooks are global:
 the first registration wins). `WsqDecoder` honours `image::Limits`: `max_alloc` must cover about
-8 bytes per pixel, or the image is refused before decoding.
+8 bytes per pixel, or the image is refused before decoding. `DecodeOptions::max_pixels` is checked
+when the image is read.
 
 ## Command line
 

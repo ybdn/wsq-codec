@@ -76,7 +76,7 @@ pub(crate) fn encode(
     if options.profile == Profile::Optimized && options.software != 0 {
         return Err(EncodeError::SoftwareRequiresConformant(options.software));
     }
-    let range = MIN_DIMENSION..=usize::from(u16::MAX);
+    let range = MIN_DIMENSION..=crate::MAX_DIMENSION;
     if !range.contains(&width) || !range.contains(&height) {
         return Err(EncodeError::InvalidDimensions { width, height });
     }
@@ -564,7 +564,9 @@ mod tests {
 #[cfg(test)]
 mod alloc_tests {
     use crate::mem::inject::{Site, refusing};
-    use crate::{DecodeError, DecodeOptions, EncodeError, EncodeOptions, decode_with, encode};
+    use crate::{
+        DecodeError, DecodeOptions, EncodeError, EncodeOptions, Profile, decode_with, encode,
+    };
 
     /// A synthetic image of integer arithmetic only.
     fn pixels(w: usize, h: usize) -> Vec<u8> {
@@ -618,18 +620,13 @@ mod alloc_tests {
     fn rate_search_output_allocations_are_fallible() {
         let (w, h) = (96, 90);
         let px = pixels(w, h);
-        let options = EncodeOptions::default();
-        let expected = crate::experimental::encode_at_rate(&px, w, h, &options).unwrap();
+        let options = EncodeOptions::default().with_profile(Profile::Optimized);
+        let expected = encode(&px, w, h, &options).unwrap();
         for allowed in [0, 1, 4, 5, 9] {
-            let out = refusing(Site::EncodeOutput, allowed, || {
-                crate::experimental::encode_at_rate(&px, w, h, &options)
-            });
+            let out = refusing(Site::EncodeOutput, allowed, || encode(&px, w, h, &options));
             assert_eq!(out, Err(EncodeError::OutOfMemory), "after {allowed}");
         }
-        assert_eq!(
-            crate::experimental::encode_at_rate(&px, w, h, &options).unwrap(),
-            expected
-        );
+        assert_eq!(encode(&px, w, h, &options).unwrap(), expected);
     }
 
     #[test]
