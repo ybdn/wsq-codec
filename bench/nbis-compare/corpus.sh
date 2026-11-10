@@ -59,7 +59,8 @@ n=${#impls[@]}
 idx=0; skipped=0; used=0; failed_calls=0
 files=()
 while IFS= read -r -d '' f; do files+=("$f"); done < <(
-  LC_ALL=C find "$corpus" -type f \( -iname '*.pgm' -o -iname '*.wsq' \) -print0 | LC_ALL=C sort -z)
+  LC_ALL=C find "$corpus" -type f \( -iname '*.pgm' -o -iname '*.wsq' \) -print0 2> /dev/null |
+    LC_ALL=C sort -z)  # find's diagnostics would name unreadable corpus directories
 total=${#files[@]}
 [ "$total" -gt 0 ] || { echo "no .pgm or .wsq file found in the corpus" >&2; exit 1; }
 echo "corpus mode: $total candidate files, $reps timed calls each (no names are printed)" >&2
