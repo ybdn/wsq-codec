@@ -26,8 +26,11 @@ corpus="$WSQ_CORPUS_DIR"
 [ -d "$corpus" ] || { echo "WSQ_CORPUS_DIR is not a directory" >&2; exit 1; }
 reps=${2:-5}
 rate=${CORPUS_RATE:-0.75}
+# Everything this script writes (the scratch directory, the list of corpus files, per-file
+# rows, the summary) is readable by its owner only.
+umask 077
 scratch="$work/.corpus-scratch"
-rm -rf "$scratch"; mkdir -p "$scratch"
+rm -rf "$scratch"; mkdir -m 700 -p "$scratch"
 trap 'rm -rf "$scratch"' EXIT
 calls="$scratch/calls.csv"
 checks="$scratch/checks.csv"
