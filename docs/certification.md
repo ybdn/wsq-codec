@@ -184,7 +184,20 @@ other and to the ones recorded on Linux x86-64; the macOS runner's `/opt/homebre
 its log suggest Apple silicon (AArch64), which would make it a second architecture, but the
 logs do not state it, and neither do they state the Windows runner's architecture.
 
-**Not verified.** Any other architecture or operating system than those runners (AArch64 Linux,
-big-endian, RISC-V, WebAssembly: `wasm32-unknown-unknown` is only built in CI, never run); a
-compiler other than the stable toolchain and 1.85 of the matrix. Run `cert compare` between two
-platforms' outputs on NIST's images before each submission, as planned above.
+**Verified, other targets (issue #65).** The tests, `tests/nbis.rs` included, and the
+benchmark's stream hashes were also executed on:
+
+| target | how | date | result |
+|---|---|---|---|
+| `aarch64-unknown-linux-gnu` | CI job `aarch64`, `ubuntu-24.04-arm`, `cargo test --release --lib --tests` and both `bench --check` | pending the first CI run | to fill in: run, commit, `uname -m` |
+| `wasm32-wasip1` | CI job `wasi`, wasmtime 50.0.1, same commands. Run by hand on 10 November 2026 (wasmtime 50.0.1, Rust 1.97.0, x86-64 host): all test binaries pass, and both `bench --check` print the three hashes of `benches/hashes.txt` | 10 November 2026 (by hand) | pass; CI run to fill in |
+| `s390x-unknown-linux-gnu` (big-endian) | CI job `s390x` of `scheduled.yml` (`cross`, QEMU), weekly and on demand: tests only. Run by hand on 10 November 2026 without `cross`, with `qemu-s390x` 8.2 user emulation: tests pass, and `bench --check` (one thread) prints the three hashes | 10 November 2026 (by hand) | pass; CI run to fill in |
+
+WASI has no threads: `src/par.rs` falls back to the calling thread, so the `threads` option
+has no effect there, and the output is the same. Every job prints `uname -m` and `rustc -vV`
+at the start, so the architecture is in the log.
+
+**Not verified.** RISC-V and other big-endian targets than `s390x`; the architecture of the
+macOS and Windows runners (the logs do not state it); a compiler other than the stable toolchain
+and 1.85 of the matrix. Run `cert compare` between two platforms' outputs on NIST's images
+before each submission, as planned above.

@@ -197,9 +197,22 @@ are correctly rounded except within about 2^-100 of the midpoint between two `f6
 claim is determinism, not exact rounding. glibc's `log` and `pow`, which NBIS used for the
 fixtures, return the correctly rounded result on all but rare inputs (about 1 in 1000 for
 `pow`); an image whose bit allocation hits one of those would get a quantizer bin differing from
-NBIS's in its last digit, identically on every platform. CI checks the NBIS fixtures and the
-benchmark's stream hashes on Linux, macOS and Windows; `docs/certification.md` lists the runs
-and what has not been verified.
+NBIS's in its last digit, identically on every platform.
+
+Targets where this has been executed, not only built (as of 10 November 2026; the test suite
+includes the NBIS fixtures, the stream hashes are those of `benches/hashes.txt`;
+`docs/certification.md` lists the runs and what has not been verified):
+
+- x86-64 Linux, macOS and Windows, on every pull request: tests and stream hashes.
+- AArch64 Linux (`ubuntu-24.04-arm`), on every pull request, job `aarch64`: tests and stream
+  hashes.
+- `wasm32-wasip1` under wasmtime 50.0.1, on every pull request, job `wasi`: tests and stream
+  hashes, with no thread (the codec then runs every job on the calling thread).
+- `s390x-unknown-linux-gnu`, big-endian, emulated by QEMU, weekly and on demand, job `s390x` of
+  `scheduled.yml`: tests.
+
+Not verified: RISC-V, other big-endian targets, and the architecture of the macOS and Windows
+runners (their logs do not state it).
 
 ## Performance
 

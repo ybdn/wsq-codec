@@ -17,6 +17,11 @@
   `EncodeError::OutOfMemory` or `DecodeError::OutOfMemory` instead of aborting; output is
   unchanged. `src/mem.rs` documents the `grep` that checks that no infallible allocation
   proportional to the pixel count remains, and tests refuse each allocation in turn.
+- Determinism is now checked on more targets (#65): CI runs the tests and the benchmark's stream
+  hashes on AArch64 Linux (`ubuntu-24.04-arm`) and on `wasm32-wasip1` under wasmtime, and the
+  weekly workflow runs the tests on big-endian `s390x` under QEMU (`cross`). Each job prints
+  `uname -m` and `rustc -vV`. The README lists the verified targets. No change to the codec;
+  the `par` unit test no longer expects a real thread on WASI, which has none.
 
 ## 0.2.0
 
