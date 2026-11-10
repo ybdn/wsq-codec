@@ -156,6 +156,24 @@ wsq decode finger.wsq finger.pgm
 wsq info finger.wsq
 ```
 
+## WebAssembly and npm
+
+The codec also runs in the browser and in Node.js, as the npm package
+[`wsq-codec`](https://www.npmjs.com/package/wsq-codec) (the `wasm/` crate `wsq-wasm`, a thin
+wasm-bindgen wrapper; `wsq-codec` itself gains no dependency):
+
+```js
+import { decode, encode } from "wsq-codec";
+
+const image = decode(wsqBytes);   // { width, height, ppi, software, comments, pixels }
+const wsq = encode(image.pixels, image.width, image.height, { bitrate: 0.75, profile: "optimized" });
+```
+
+The [demo page](https://ybdn-ei.github.io/wsq-codec/) opens `.wsq` files and converts PNG or JPEG
+to WSQ in your browser: no file is uploaded, and a Content-Security-Policy lets the page load
+only its own files. See [wasm/README.md](wasm/README.md) for the API and how to build it
+(`wasm/build.sh`).
+
 ## ANSI/NIST-ITL transactions
 
 This crate handles the WSQ stream only. Parsing the Type-4 and Type-14 records of ANSI/NIST-ITL

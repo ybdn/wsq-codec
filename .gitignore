@@ -5,6 +5,10 @@ Cargo.lock
 /fuzz/artifacts
 /fuzz/coverage
 
+# The npm package and the demo's copy of it, built by wasm/build.sh.
+/wasm/pkg
+/wasm/demo/wsq
+
 # The NBIS comparison (bench/nbis-compare) is not a library: it commits its lock files.
 !/bench/nbis-compare/Cargo.lock
 !/bench/nbis-compare/Cargo.released.lock

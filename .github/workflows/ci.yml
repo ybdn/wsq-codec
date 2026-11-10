@@ -42,6 +42,7 @@ jobs:
               - "tests/**"
               - "examples/**"
               - "cli/**"
+              - "wasm/**" # the demo, wasm/demo, included
               - "fuzz/**"
               - "Cargo.*"
               - "deny.toml"
@@ -87,6 +88,40 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo build --target wasm32-unknown-unknown
       - run: cargo build --target wasm32-unknown-unknown --features image
+
+  # The npm package and its demo: the wasm crate built and tested as wasm-pack does, the tests run
+  # under Node.js (wasm-bindgen-test), and the package built by `wasm/build.sh` loaded back from a
+  # tarball in Node.js, as ESM and as CommonJS. wasm-pack and the wasm-bindgen CLI it needs are
+  # built from crates.io at fixed versions; rust-cache keeps the binaries between runs.
+  npm:
+    name: wasm-pack (npm package)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install wasm-pack
+        run: command -v wasm-pack || cargo install wasm-pack --version 0.15.1 --locked
+      - name: Record the tools
+        run: |
+          node --version
+          npm --version
+          wasm-pack --version
+      - run: cargo clippy -p wsq-wasm --all-targets -- -D warnings
+      - run: cargo clippy -p wsq-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
+      - run: cargo test -p wsq-wasm
+      - run: wasm-pack test --node wasm
+      - name: Build the package
+        run: wasm/build.sh
+      - name: Load the package in Node.js
+        run: node wasm/scripts/check-package.mjs wasm/pkg wasm/demo/sample.wsq
 
   # 32-bit address space: a 65535 by 65535 header must give an error, not a
   # "capacity overflow" panic (see the allocation notes in `src/mem.rs`).
@@ -219,7 +254,7 @@ jobs:
   # The one status to read: green when every needed job passed or was skipped.
   ci:
     if: ${{ !cancelled() }}
-    needs: [changes, core, bench, wasm, i686, aarch64, wasi, package, semver, deny]
+    needs: [changes, core, bench, wasm, npm, i686, aarch64, wasi, package, semver, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

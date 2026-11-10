@@ -88,6 +88,15 @@ Carried over from the work merged since 0.2.0:
   only (never a file name or a per-file row). `docs/nbis-comparison.md` and the README
   "Performance" section are refreshed with the 10 November 2026 run, whose machine was shared and
   noisy; the real-corpus run is recorded there as not executed.
+- WebAssembly package and browser demo (#48): the new `wasm/` workspace member `wsq-wasm`
+  (`publish = false` on crates.io) wraps the codec with wasm-bindgen: `decode`, `readInfo` and
+  `encode` (options `bitrate`, `ppi`, `comment`, `profile`) move `Uint8Array`s and metadata, and
+  errors are JavaScript exceptions with the Rust message. The release workflow publishes it on npm
+  as `wsq-codec` (bundler, Node.js and no-bundler `web` builds) with provenance. `wasm/demo` is a
+  static page, deployed to GitHub Pages, that opens WSQ files and converts PNG or JPEG to WSQ
+  entirely in the browser: no upload, a strict Content-Security-Policy, works offline. `wsq-codec`
+  itself is unchanged and still has no dependency; CI builds the package and runs its tests under
+  Node.js.
 
 ## 0.2.0
 

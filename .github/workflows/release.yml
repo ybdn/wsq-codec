@@ -1,8 +1,10 @@
 name: Release
 
 # Publishes to crates.io through Trusted Publishing (OIDC, no stored token) when a `v*` tag
-# is pushed on `main`. A manual run does every check and `cargo publish --dry-run`, and
-# never publishes: publishing is irreversible and only a tag on main may do it.
+# is pushed on `main`, and the WebAssembly package to npm (`wsq-codec`, with provenance, also
+# through Trusted Publishing). A manual run does every check, `cargo publish --dry-run` and
+# `npm publish --dry-run`, and never publishes: publishing is irreversible and only a tag on
+# main may do it.
 
 on:
   push:
@@ -96,3 +98,61 @@ jobs:
         run: |
           awk -v v="## $VERSION" '$0 == v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
           gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
+
+  # The npm package of the `wasm/` crate. npm Trusted Publishing (OIDC) authenticates it once the
+  # maintainer has configured the trusted publisher on npmjs.com (CONTRIBUTING.md); the very first
+  # publish, before the package exists there, needs the `NPM_TOKEN` secret instead.
+  npm:
+    name: publish to npm
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write # npm Trusted Publishing and the provenance attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - name: Check that the package has the release's version
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          wasm_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' wasm/Cargo.toml | head -n 1)
+          if [ "$wasm_version" != "$VERSION" ]; then
+            echo "::error::wasm/Cargo.toml has version $wasm_version, Cargo.toml has $VERSION"
+            exit 1
+          fi
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.15.1 --locked
+      # Trusted Publishing needs npm 11.5.1 or later; the runner's Node.js may bring an older one.
+      - name: Install a recent npm
+        run: npm install --global npm@11.21.2
+      - name: Record the tools
+        run: |
+          node --version
+          npm --version
+          wasm-pack --version
+      - name: Build the package
+        run: wasm/build.sh
+      - name: Load the package in Node.js
+        run: node wasm/scripts/check-package.mjs wasm/pkg wasm/demo/sample.wsq
+      - name: Dry run
+        if: github.event_name != 'push'
+        working-directory: wasm/pkg
+        run: npm publish --dry-run --access public
+      - name: Use the stored token (first publish only)
+        if: github.event_name == 'push'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "::notice::publishing with the NPM_TOKEN secret; remove it once Trusted Publishing is set up"
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" >> "$HOME/.npmrc"
+          fi
+      - name: Publish
+        if: github.event_name == 'push'
+        working-directory: wasm/pkg
+        run: npm publish --provenance --access public
