@@ -199,7 +199,138 @@ jobs:
       - run: cargo bench --bench codec --target wasm32-wasip1 -- 1 1 --check
       - run: cargo bench --bench codec --target wasm32-wasip1 -- 0 1 --check
 
-    needs: [changes, core, bench, wasm, npm, i686, aarch64, wasi, python, certified, certified-version, package, semver, capi, capi-header, deny]
+  # Python bindings (python/, issue #49): the wheel is built with maturin on the three operating
+  # systems and the round-trip tests run against the installed wheel, from outside python/ so
+  # that the package under test is the wheel and not the source directory. The wheel is abi3
+  # (one per platform for CPython 3.9 and later), so one interpreter version per system is
+  # enough to test it; Linux also tests the oldest and the newest.
+  python:
+    name: python (${{ matrix.os }}, ${{ matrix.python }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.9" }
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: macos-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.13" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Clippy
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        run: cargo clippy -p wsq-python --all-targets -- -D warnings
+      - name: Install the build and test tools
+        run: python -m pip install maturin numpy pytest
+      - name: Build the wheel
+        run: maturin build --release --manifest-path python/Cargo.toml --out dist
+      - name: Build the source distribution
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        run: maturin sdist --manifest-path python/Cargo.toml --out dist-sdist
+      - name: Install the wheel
+        run: python -m pip install --no-index --no-deps --find-links dist wsq-codec
+      - name: Round-trip tests
+        run: python -m pytest python/tests -v
+
+  # The certified crate on the compiler the certificate names (certified/rust-toolchain.toml):
+  # built, linted and tested with it, and the benchmark's stream hashes through wsq-codec. rustup
+  # reads the file from the working directory, hence `working-directory: certified` on every
+  # step; the other jobs use the stable and MSRV toolchains and are not affected, because the
+  # file is not at the repository root. The step that records the compiler fails if rustup did
+  # not apply the pin.
+  certified:
+    name: certified (pinned toolchain)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: certified
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - name: Record the compiler
+        run: |
+          rustc -vV
+          cargo -V
+          pinned=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          actual=$(rustc --version | cut -d' ' -f2)
+          if [ "$pinned" != "$actual" ]; then
+            echo "::error::rustc is $actual, rust-toolchain.toml pins $pinned"
+            exit 1
+          fi
+      - name: Check the exact-version pins of wsq-certified
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          for manifest in ../Cargo.toml ../cli/Cargo.toml; do
+            if ! grep -q "^wsq-certified = { version = \"=$version\"" "$manifest"; then
+              echo "::error::$manifest does not depend on wsq-certified =$version"
+              exit 1
+            fi
+          done
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release -p wsq-cli
+      - run: cargo test --release
+      - run: cargo test --release --test nbis -- --ignored
+      - run: cargo test --release -p wsq-cli
+      - run: cargo bench -p wsq-codec --bench codec -- 1 1 --check
+      - run: cargo bench -p wsq-codec --bench codec -- 0 1 --check
+
+  # Any change to certified/ is a new version to certify (certified/README.md): a pull request
+  # that changes its code, tests or manifest must raise `version` in certified/Cargo.toml.
+  # Markdown files are exempt (they are not built). Pull requests only.
+  certified-version:
+    name: certified version bump
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the base commit must be there
+      - name: Compare with the base branch
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE_SHA" HEAD -- certified ':!certified/*.md')
+          if [ -z "$changed" ]; then
+            echo "certified/ is unchanged (Markdown files aside)"
+            exit 0
+          fi
+          echo "Changed under certified/:"
+          echo "$changed"
+          version_in() {
+            git show "$1:certified/Cargo.toml" 2>/dev/null | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1
+          }
+          base=$(version_in "$BASE_SHA")
+          head=$(version_in HEAD)
+          if [ -z "$base" ]; then
+            echo "certified/ is new in this pull request (version $head)"
+            exit 0
+          fi
+          newest=$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -n 1)
+          if [ "$head" = "$base" ] || [ "$newest" != "$head" ]; then
+            echo "::error::certified/ changed but its version is $head (base: $base). Any change to wsq-certified is a new version to certify: raise version in certified/Cargo.toml, update the pins in Cargo.toml and cli/Cargo.toml, and add a section to certified/CHANGELOG.md."
+            exit 1
+          fi
+          if ! grep -qx "## $head" certified/CHANGELOG.md; then
+            echo "::error::certified/CHANGELOG.md has no '## $head' section"
+            exit 1
+          fi
+          echo "certified/ changed and its version went from $base to $head"
 
   package:
     needs: changes
