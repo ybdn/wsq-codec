@@ -290,6 +290,8 @@ or the lowest share of the reference):
 Per image (the original's NFIQ 2 score and minutiae count are in the same row as each decoded
 image's):
 
+| image | requested bpp | encoder | bytes | NFIQ 2 original | NFIQ 2 decoded | change | minutiae original | minutiae decoded | change | bozorth3 match | bozorth3 self | match / self |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | ridgefp_a_640x704 | 0.5 | conformant | 12481 | 50 | 41 | -9 | 34 | 36 | +2 | 64 | 70 | 91% |
 | ridgefp_a_640x704 | 0.5 | optimized | 28088 | 50 | 45 | -5 | 34 | 33 | -1 | 67 | 70 | 96% |
 | ridgefp_a_640x704 | 0.5 | conformant, equal size | 28092 | 50 | 46 | -4 | 34 | 33 | -1 | 67 | 70 | 96% |
