@@ -5,7 +5,7 @@
 //! the FNV-1a hash of NBIS's stream and of NBIS's decode, and the test makes
 //! the image again.
 
-use wsq_codec::{EncodeOptions, decode, encode, read_info};
+use wsq_certified::{EncodeOptions, decode, encode, read_info};
 
 /// Synthetic test images, the same as `pattern` in make_fixtures.py.
 fn pattern(kind: &str, w: usize, h: usize, seed: u32) -> Vec<u8> {

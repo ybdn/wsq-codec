@@ -20,7 +20,7 @@ date below and the conditions of measurement. They are measurements, not a verdi
   C2 = (0.03 * 255)^2. It is not the Gaussian-window SSIM of the literature: compare it with
   other runs of this tool only.
 - NBIS: `cwsq` and `dwsq` of NBIS 5.0.0 (`--nbis BIN_DIR`), built with
-  `-ffp-contract=off -fno-fast-math` (`tests/data/README.md`). `cwsq` encodes the raw image
+  `-ffp-contract=off -fno-fast-math` (`certified/tests/data/README.md`). `cwsq` encodes the raw image
   with the same bit rate and 500 ppi, `dwsq` decodes its stream, and both are measured as
   this crate's are. The last column says whether the stream and the reconstruction are
   byte-identical to this crate's. The tool fails if one is not.
@@ -147,7 +147,7 @@ search (one quantization and one Huffman coding per stream tried), not a figure 
 - At equal size (streams within 6 bytes of each other), PSNR is the same as the conformant
   encoder's to the 0.01 dB printed, and SSIM within 0.0001. This follows from the code rather than from the
   images: the conformant bit allocation already gives every subband its width divided by one
-  constant that depends on the requested rate (`src/quant.rs`, `bin_widths`), so scaling all the
+  constant that depends on the requested rate (`certified/src/quant.rs`, `bin_widths`), so scaling all the
   widths by one factor stays within the family of conformant encodings at other requested rates.
   The gain is in hitting the size, not in quality at a given size.
 - NBIS's `dwsq` decodes the 20 Optimized streams to the same pixels as this crate. JNBIS was

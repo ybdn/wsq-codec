@@ -4,8 +4,8 @@ use crate::mem::{self, OutOfMemory};
 use crate::quant::{self, QuantParams};
 use crate::tables::{self, EOI, FrameHeader, SOI};
 use crate::tree::{NUM_SUBBANDS, START_SUBBAND_2, START_SUBBAND_3, Trees};
-use crate::wavelet::{self, HIFILT, LOFILT};
-use crate::{EncodeOptions, Profile, math, nistcom, par};
+use crate::wavelet::{self, HIFILT, LOFILT, Scratch};
+use crate::{EncodeOptions, nistcom, par};
 
 /// More than the bytes of the tables of a stream beside its comments and
 /// entropy-coded blocks: the transform, quantization and Huffman tables, the
@@ -53,29 +53,26 @@ fn normalize(pixels: &[u8], data: &mut [&mut [f32]], threads: usize) -> (f32, f3
     (m_shift, r_scale)
 }
 
-/// Share of the target size the [`Profile::Optimized`] search may fall short
-/// by: it stops on the first stream between `1 - HIT_TOLERANCE` times the
-/// target and the target.
-pub(crate) const HIT_TOLERANCE: f64 = 0.005;
-/// Most streams the [`Profile::Optimized`] search writes before keeping the best.
-const HIT_MAX_TRIES: usize = 40;
-/// Bound on the base-2 logarithm of the scale factor.
-const HIT_LOG2_RANGE: f64 = 40.0;
-/// Bracket width, on that logarithm, below which the search stops: about
-/// the resolution of an `f32` factor.
-const HIT_MIN_GAP: f64 = 1e-7;
+/// What the stream depends on besides the bin widths: the image, transformed
+/// and with its variances, and the bit allocation. `data` borrows the
+/// scratch buffer that holds the transformed image.
+struct Analysis<'a> {
+    data: Vec<&'a [f32]>,
+    stats: quant::Stats,
+    /// The widths of the specification's bit allocation, before they are
+    /// held to the quantization table.
+    allocated: QuantParams,
+    stream: Stream,
+}
 
-pub(crate) fn encode(
+/// Checks the arguments, transforms the image and allocates the bits.
+fn analyze<'a>(
     pixels: &[u8],
     width: usize,
     height: usize,
     options: &EncodeOptions,
-    scratch: &mut wavelet::Scratch,
-) -> Result<Vec<u8>, EncodeError> {
-    // Only a conformant stream may carry the FBI's implementation number.
-    if options.profile == Profile::Optimized && options.software != 0 {
-        return Err(EncodeError::SoftwareRequiresConformant(options.software));
-    }
+    scratch: &'a mut Scratch,
+) -> Result<Analysis<'a>, EncodeError> {
     let range = MIN_DIMENSION..=crate::MAX_DIMENSION;
     if !range.contains(&width) || !range.contains(&height) {
         return Err(EncodeError::InvalidDimensions { width, height });
@@ -95,13 +92,14 @@ pub(crate) fn encode(
     }
 
     let threads = crate::thread_count(options.threads);
-    let mut data = scratch.image.rows(width, height, threads)?;
+    let Scratch { image, tmp, keep } = scratch;
+    let mut data = image.rows(width, height, threads)?;
     let (m_shift, r_scale) = normalize(pixels, &mut data, threads);
     let trees = Trees::new(width, height);
-    let mut tmp = scratch.tmp.rows(width, height, threads)?;
-    wavelet::decompose(&mut data, &mut tmp, &trees.w, threads)?;
-    drop(tmp);
-    scratch.tmp.release(scratch.keep);
+    let mut rows = tmp.rows(width, height, threads)?;
+    wavelet::decompose(&mut data, &mut rows, &trees.w, threads)?;
+    drop(rows);
+    tmp.release(*keep);
 
     let data: Vec<&[f32]> = data.into_iter().map(|row| &*row).collect();
     let stats = quant::variances(&data, &trees.q, threads);
@@ -113,32 +111,99 @@ pub(crate) fn encode(
         r_scale,
         software: options.software,
     };
-    let stream = Stream {
-        trees: &trees,
-        frame: &frame,
-        bitrate,
-        threads,
-    };
-    match options.profile {
-        Profile::Conformant => {
-            let mut params = allocated;
-            quant::limit_bin_widths(&mut params, &stats);
-            let coeffs = quant::quantize(&data, &trees.q, &params, threads)?;
-            drop(data);
-            scratch.image.release(scratch.keep);
-            let mut out = header(width, height, options)?;
-            stream.write(&mut out, &coeffs, &params)?;
-            Ok(out)
-        }
-        Profile::Optimized => {
-            let head = header(width, height, options)?;
-            let target = f64::from(bitrate) * (width * height) as f64 / 8.0;
-            let out = hit_rate(&data, &stats, &allocated, &head, &stream, target);
-            drop(data);
-            scratch.image.release(scratch.keep);
-            out
-        }
+    Ok(Analysis {
+        data,
+        stats,
+        allocated,
+        stream: Stream {
+            trees,
+            frame,
+            bitrate,
+            threads,
+        },
+    })
+}
+
+/// Encodes an image with the bit allocation of the specification: the
+/// conformant stream.
+pub(crate) fn encode(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    options: &EncodeOptions,
+    scratch: &mut Scratch,
+) -> Result<Vec<u8>, EncodeError> {
+    let Analysis {
+        data,
+        stats,
+        allocated,
+        stream,
+    } = analyze(pixels, width, height, options, scratch)?;
+    let mut params = allocated;
+    quant::limit_bin_widths(&mut params, &stats);
+    let coeffs = quant::quantize(&data, &stream.trees.q, &params, stream.threads)?;
+    drop(data);
+    scratch.image.release(scratch.keep);
+    let mut out = header(width, height, options)?;
+    stream.write(&mut out, &coeffs, &params)?;
+    Ok(out)
+}
+
+/// An image analyzed once, from which streams are written with the bin
+/// widths of the bit allocation multiplied by a factor. This is the one
+/// seam through which `wsq-codec` builds its optimized profile on this
+/// crate's code (see `docs/certification.md`); a factor of 1 gives the
+/// conformant stream, byte for byte.
+pub struct Scaler<'a> {
+    analysis: Analysis<'a>,
+    /// The start of every stream: start of image, comments and transform
+    /// table.
+    head: Vec<u8>,
+}
+
+impl Scaler<'_> {
+    /// Writes the stream whose bin widths are those of the bit allocation
+    /// multiplied by `factor` (zero bins in the same ratio), held to the
+    /// range of the quantization table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EncodeError::BitrateTooLow`] if the widths do not fit the
+    /// quantization table, and [`EncodeError::OutOfMemory`] if a buffer
+    /// cannot be allocated.
+    pub fn write(&self, factor: f32) -> Result<Vec<u8>, EncodeError> {
+        let analysis = &self.analysis;
+        let params = scaled(&analysis.allocated, &analysis.stats, factor);
+        let coeffs = quant::quantize(
+            &analysis.data,
+            &analysis.stream.trees.q,
+            &params,
+            analysis.stream.threads,
+        )?;
+        let mut out = mem::with_capacity(self.head.len())?;
+        out.extend_from_slice(&self.head);
+        analysis.stream.write(&mut out, &coeffs, &params)?;
+        Ok(out)
     }
+}
+
+/// Analyzes an image as [`encode`] does and hands the result to `f`, which
+/// writes streams from it; the buffers are released when `f` returns.
+pub(crate) fn with_scaler<T>(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    options: &EncodeOptions,
+    scratch: &mut Scratch,
+    f: impl FnOnce(&Scaler<'_>) -> Result<T, EncodeError>,
+) -> Result<T, EncodeError> {
+    let analysis = analyze(pixels, width, height, options, scratch)?;
+    let head = header(width, height, options)?;
+    let scaler = Scaler { analysis, head };
+    let out = f(&scaler);
+    drop(scaler);
+    scratch.image.release(scratch.keep);
+    out
 }
 
 /// The start of a stream, the same whatever the bin widths: start of image,
@@ -164,14 +229,14 @@ fn header(width: usize, height: usize, options: &EncodeOptions) -> Result<Vec<u8
 }
 
 /// What the rest of a stream depends on besides the bin widths.
-struct Stream<'a> {
-    trees: &'a Trees,
-    frame: &'a FrameHeader,
+struct Stream {
+    trees: Trees,
+    frame: FrameHeader,
     bitrate: f32,
     threads: usize,
 }
 
-impl Stream<'_> {
+impl Stream {
     /// Appends the quantization table, the frame header, the Huffman tables
     /// and blocks of `coeffs`, and the end of image to `out`.
     fn write(
@@ -180,7 +245,7 @@ impl Stream<'_> {
         coeffs: &[i16],
         params: &QuantParams,
     ) -> Result<(), EncodeError> {
-        let trees = self.trees;
+        let trees = &self.trees;
         // The coefficients of each block, in subband order.
         let block_len = |subbands: std::ops::Range<usize>| -> usize {
             subbands
@@ -196,7 +261,7 @@ impl Stream<'_> {
         let (block2, block3) = rest.split_at(len2);
 
         tables::write_quant_table(out, params, self.bitrate)?;
-        tables::write_frame_header(out, self.frame);
+        tables::write_frame_header(out, &self.frame);
 
         // The first block has its own Huffman table; the other two share one.
         // Counting the symbols and coding the blocks are independent per block,
@@ -274,160 +339,6 @@ fn scaled(allocated: &QuantParams, stats: &quant::Stats, factor: f32) -> QuantPa
     params
 }
 
-/// State of the [`Profile::Optimized`] search.
-struct Search<'a> {
-    data: &'a [&'a [f32]],
-    stats: &'a quant::Stats,
-    allocated: &'a QuantParams,
-    head: &'a [u8],
-    stream: &'a Stream<'a>,
-    target: f64,
-    /// Longest stream that fits the target.
-    fits: Option<Vec<u8>>,
-    /// Shortest stream that does not.
-    over: Option<Vec<u8>>,
-    /// Why widths did not fit the quantization table, the first time.
-    error: Option<EncodeError>,
-    tries: usize,
-}
-
-impl Search<'_> {
-    /// Writes the stream for `2^x` times the bit allocation's widths and
-    /// returns how far its length is from the middle of the accepted range,
-    /// as a difference of logarithms: positive if too long, negative if too
-    /// short, minus infinity if the widths do not fit the quantization
-    /// table (they are then too wide).
-    fn try_scale(&mut self, x: f64) -> Result<f64, EncodeError> {
-        self.tries += 1;
-        let params = scaled(self.allocated, self.stats, math::pow(2.0, x) as f32);
-        let coeffs = quant::quantize(
-            self.data,
-            &self.stream.trees.q,
-            &params,
-            self.stream.threads,
-        )?;
-        let mut out = mem::with_capacity(self.head.len())?;
-        out.extend_from_slice(self.head);
-        match self.stream.write(&mut out, &coeffs, &params) {
-            Ok(()) => {}
-            Err(e @ EncodeError::BitrateTooLow(_)) => {
-                self.error.get_or_insert(e);
-                return Ok(f64::NEG_INFINITY);
-            }
-            Err(e) => return Err(e),
-        }
-        let len = out.len() as f64;
-        if len <= self.target {
-            if self.fits.as_ref().is_none_or(|f| f.len() < out.len()) {
-                self.fits = Some(out);
-            }
-        } else if self.over.as_ref().is_none_or(|o| o.len() > out.len()) {
-            self.over = Some(out);
-        }
-        Ok(math::ln(len) - math::ln(self.target * (1.0 - HIT_TOLERANCE / 2.0)))
-    }
-
-    /// Whether a stream within the accepted range has been written, or the
-    /// search has run out of tries.
-    fn finished(&self) -> bool {
-        self.tries >= HIT_MAX_TRIES
-            || self
-                .fits
-                .as_ref()
-                .is_some_and(|f| f.len() as f64 >= self.target * (1.0 - HIT_TOLERANCE))
-    }
-}
-
-/// The [`Profile::Optimized`] search: the stream whose total length comes closest to
-/// `target` bytes without exceeding it, found by scaling every bin width of
-/// the bit allocation by one factor.
-///
-/// The length shrinks, in steps, as the factor grows. The search runs on
-/// the base-2 logarithm of the factor, starting from the conformant widths
-/// (factor 1): it doubles its step until it brackets the target, then
-/// narrows the bracket by regula falsi on the logarithm of the length
-/// (Illinois variant), or by halving next to widths too wide for the
-/// quantization table. It stops on the first stream within
-/// [`HIT_TOLERANCE`] below the target, or after [`HIT_MAX_TRIES`] streams,
-/// and returns the longest stream that fits, or else the shortest one. The
-/// steps are plain arithmetic on lengths with the crate's own logarithm and
-/// power, so the result depends neither on the platform nor on the number
-/// of threads.
-fn hit_rate(
-    data: &[&[f32]],
-    stats: &quant::Stats,
-    allocated: &QuantParams,
-    head: &[u8],
-    stream: &Stream<'_>,
-    target: f64,
-) -> Result<Vec<u8>, EncodeError> {
-    let mut search = Search {
-        data,
-        stats,
-        allocated,
-        head,
-        stream,
-        target,
-        fits: None,
-        over: None,
-        error: None,
-        tries: 0,
-    };
-    let mut prev = (0.0f64, search.try_scale(0.0)?);
-    // Too long: widen (x up); too short: narrow (x down).
-    let mut step = if prev.1 > 0.0 { 1.0 } else { -1.0 };
-    let mut bracket = None;
-    while !search.finished() {
-        let x = prev.0 + step;
-        if x.abs() > HIT_LOG2_RANGE {
-            break;
-        }
-        let g = search.try_scale(x)?;
-        if (g > 0.0) != (prev.1 > 0.0) {
-            bracket = Some((prev, (x, g)));
-            break;
-        }
-        prev = (x, g);
-        step *= 2.0;
-    }
-    if let Some((p, q)) = bracket {
-        // `long` has g > 0, `short` g <= 0.
-        let (mut long, mut short) = if p.1 > 0.0 { (p, q) } else { (q, p) };
-        let mut kept = 0i8;
-        while !search.finished() && (long.0 - short.0).abs() > HIT_MIN_GAP {
-            let mut x = if short.1.is_finite() {
-                (long.0 * short.1 - short.0 * long.1) / (short.1 - long.1)
-            } else {
-                f64::NAN
-            };
-            let (lo, hi) = (long.0.min(short.0), long.0.max(short.0));
-            #[allow(clippy::neg_cmp_op_on_partial_ord)] // also catches NaN
-            if !(lo < x && x < hi) {
-                x = (long.0 + short.0) / 2.0;
-            }
-            let g = search.try_scale(x)?;
-            if g > 0.0 {
-                long = (x, g);
-                if kept == 1 {
-                    short.1 /= 2.0;
-                }
-                kept = 1;
-            } else {
-                short = (x, g);
-                if kept == -1 {
-                    long.1 /= 2.0;
-                }
-                kept = -1;
-            }
-        }
-    }
-    search.fits.or(search.over).ok_or_else(|| {
-        search
-            .error
-            .unwrap_or(EncodeError::BitrateTooLow(stream.bitrate))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,22 +400,6 @@ mod tests {
     }
 
     #[test]
-    fn optimized_profile_refuses_the_software_number() {
-        let (w, h) = (101, 97);
-        let mut scratch = wavelet::Scratch::default();
-        let options = EncodeOptions::default()
-            .with_profile(crate::Profile::Optimized)
-            .with_software(0x1234);
-        assert_eq!(
-            encode(&checker(w, h), w, h, &options, &mut scratch).unwrap_err(),
-            EncodeError::SoftwareRequiresConformant(0x1234)
-        );
-        let options = options.with_software(0);
-        let wsq = encode(&checker(w, h), w, h, &options, &mut scratch).unwrap();
-        assert_eq!(read_info(&wsq).unwrap().software, 0);
-    }
-
-    #[test]
     fn invalid_arguments_are_refused() {
         let options = EncodeOptions::default();
         let err = |w, h, pixels: usize, o: &EncodeOptions| {
@@ -563,10 +458,10 @@ mod tests {
 
 #[cfg(test)]
 mod alloc_tests {
+    use super::{Scaler, with_scaler};
     use crate::mem::inject::{Site, refusing};
-    use crate::{
-        DecodeError, DecodeOptions, EncodeError, EncodeOptions, Profile, decode_with, encode,
-    };
+    use crate::wavelet::Scratch;
+    use crate::{DecodeError, DecodeOptions, EncodeError, EncodeOptions, decode_with, encode};
 
     /// A synthetic image of integer arithmetic only.
     fn pixels(w: usize, h: usize) -> Vec<u8> {
@@ -617,16 +512,24 @@ mod alloc_tests {
     }
 
     #[test]
-    fn rate_search_output_allocations_are_fallible() {
+    fn scaled_output_allocations_are_fallible() {
         let (w, h) = (96, 90);
         let px = pixels(w, h);
-        let options = EncodeOptions::default().with_profile(Profile::Optimized);
+        let options = EncodeOptions::default();
         let expected = encode(&px, w, h, &options).unwrap();
-        for allowed in [0, 1, 4, 5, 9] {
-            let out = refusing(Site::EncodeOutput, allowed, || encode(&px, w, h, &options));
-            assert_eq!(out, Err(EncodeError::OutOfMemory), "after {allowed}");
-        }
-        assert_eq!(encode(&px, w, h, &options).unwrap(), expected);
+        let run = || {
+            let write = |scaler: &Scaler<'_>| scaler.write(1.0);
+            with_scaler(&px, w, h, &options, &mut Scratch::default(), write)
+        };
+        // A factor of 1 is the conformant stream.
+        assert_eq!(run().unwrap(), expected);
+        let count = every_refusal(
+            Site::EncodeOutput,
+            &expected,
+            |e| *e == EncodeError::OutOfMemory,
+            run,
+        );
+        assert!(count >= 4, "{count}");
     }
 
     #[test]

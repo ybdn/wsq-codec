@@ -27,7 +27,7 @@
 //! Comparison with NBIS, which never links to this crate, in one of two ways:
 //!
 //! - `--nbis BIN_DIR`: `BIN_DIR` holds NBIS 5.0.0's `cwsq` and `dwsq` (build procedure in
-//!   `tests/data/README.md`). Each image is written as a raw file in a temporary directory,
+//!   `certified/tests/data/README.md`). Each image is written as a raw file in a temporary directory,
 //!   encoded by `cwsq` and decoded by `dwsq`, and the stream and the reconstruction are measured
 //!   like this crate's own.
 //! - `--nbis-streams DIR`: `DIR` holds streams NBIS wrote earlier, named `IMAGE_RATE.wsq` (for

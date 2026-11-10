@@ -14,6 +14,8 @@ categories = ["command-line-utilities", "multimedia::images"]
 # Hand-written argument parsing: the tool adds no dependency beyond the codec itself.
 [dependencies]
 wsq-codec = { version = "1.0.0", path = ".." }
+# The certification kit (`wsq cert`) runs the certified crate directly.
+wsq-certified = { version = "=1.0.0", path = "../certified" }
 
 [[bin]]
 name = "wsq"

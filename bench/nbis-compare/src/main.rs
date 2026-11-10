@@ -26,7 +26,7 @@ use std::time::Instant;
 use wsq_codec::{DecodeOptions, EncodeOptions, decode_with, encode};
 
 /// Synthetic images, the same as `pattern` in wsq-codec's `tests/nbis.rs` and
-/// `tests/data/make_fixtures.py`: integer arithmetic only, so identical on every platform.
+/// `certified/tests/data/make_fixtures.py`: integer arithmetic only, so identical on every platform.
 fn pattern(kind: &str, w: usize, h: usize, seed: u32) -> Vec<u8> {
     let mut state = seed;
     let mut rand = || {

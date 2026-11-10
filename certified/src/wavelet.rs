@@ -542,18 +542,22 @@ fn synthesis_plan(n: usize, lo: &[f32], hi: &[f32], inv: bool) -> Plan {
 /// The transformed image and the transform's scratch space, which
 /// [`crate::Decoder`] and [`crate::Encoder`] keep from one image to the
 /// next.
+///
+/// Public (through the hidden `for_wsq_codec` module) only so that
+/// `wsq-codec`'s `Encoder` can keep the same buffers for its own profile.
 #[derive(Default)]
-pub(crate) struct Scratch {
-    pub image: Bands,
-    pub tmp: Bands,
+pub struct Scratch {
+    pub(crate) image: Bands,
+    pub(crate) tmp: Bands,
     /// Keeps the buffers once an image is done. Without it each buffer is
     /// freed as soon as it is no longer needed, which keeps the peak
     /// memory of a single image down.
-    pub keep: bool,
+    pub(crate) keep: bool,
 }
 
 impl Scratch {
     /// Buffers kept from one image to the next.
+    #[must_use]
     pub fn kept() -> Self {
         Scratch {
             keep: true,

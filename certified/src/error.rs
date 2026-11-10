@@ -153,9 +153,12 @@ pub enum EncodeError {
     CommentTooLong(usize),
     /// The resolution is zero.
     InvalidPpi,
-    /// An implementation number other than 0 was given with the
-    /// [`Optimized`](crate::Profile::Optimized) profile. Only a conformant
-    /// stream may carry an implementation number the FBI assigned.
+    /// An implementation number other than 0 was given with the optimized
+    /// profile of the `wsq-codec` crate (`Profile::Optimized`). Only a
+    /// conformant stream may carry an implementation number the FBI
+    /// assigned. The encoder of `wsq-certified` is always conformant and
+    /// never returns this error: the variant lives here because
+    /// `wsq-codec` re-exports this type as its own.
     SoftwareRequiresConformant(u16),
     /// The memory the encoder needs for the image could not be allocated:
     /// its buffers, the wavelet transform's blocks or the compressed output.

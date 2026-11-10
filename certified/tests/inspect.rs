@@ -1,7 +1,7 @@
 //! Reading the parameters and bin indices of a stream.
 
-use wsq_codec::inspect::read_quantized;
-use wsq_codec::{DecodeError, DecodeOptions, EncodeOptions, encode};
+use wsq_certified::inspect::read_quantized;
+use wsq_certified::{DecodeError, DecodeOptions, EncodeOptions, encode};
 
 fn image(w: usize, h: usize) -> Vec<u8> {
     (0..w * h)
@@ -43,7 +43,7 @@ fn reads_every_fixture() {
         if path.extension().is_some_and(|e| e == "wsq") {
             let data = std::fs::read(&path).unwrap();
             let q = read_quantized(&data, &DecodeOptions::default()).unwrap();
-            let info = wsq_codec::read_info(&data).unwrap();
+            let info = wsq_certified::read_info(&data).unwrap();
             assert_eq!(q.info, info, "{}", path.display());
             count += 1;
         }

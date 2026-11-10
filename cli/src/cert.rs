@@ -1,5 +1,10 @@
 //! Running the FBI certification tests locally (see docs/certification.md).
 //!
+//! The kit runs the `wsq-certified` crate directly, not `wsq-codec`: the
+//! certificate covers one version of that crate, and `submission.txt`
+//! names it. Build the binary with the pinned toolchain
+//! (`certified/rust-toolchain.toml`) when it is meant for a submission.
+//!
 //! NIST supplies the test images and its reference streams and
 //! reconstructions on request; they must never be committed. These
 //! commands produce the files a submission holds and compare them with
@@ -31,8 +36,8 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use wsq_codec::inspect::{Quantized, read_quantized};
-use wsq_codec::{DecodeOptions, EncodeOptions, Profile};
+use wsq_certified::inspect::{Quantized, read_quantized};
+use wsq_certified::{DecodeOptions, EncodeOptions};
 
 use crate::accuracy::{self, Thresholds};
 use crate::corpus::read_pgm;
@@ -151,11 +156,10 @@ fn encode(
         let rel = path.strip_prefix(input)?.with_extension("wsq");
         for (rate, name) in RATES {
             let options = EncodeOptions::default()
-                .with_profile(Profile::Conformant)
                 .with_bitrate(rate)
                 .with_ppi(ppi)
                 .with_software(software);
-            let wsq = wsq_codec::encode(pixels, width, height, &options)
+            let wsq = wsq_certified::encode(pixels, width, height, &options)
                 .map_err(|e| format!("{} at {name}: {e}", path.display()))?;
             let out = output.join(name).join(&rel);
             if let Some(parent) = out.parent() {
@@ -206,7 +210,12 @@ fn submission_sheet(software: u16, compiler: Option<&str>) -> String {
     );
     let _ = writeln!(
         s,
-        "Implementation:            wsq-codec {}",
+        "Implementation:            wsq-certified {}",
+        wsq_certified::VERSION
+    );
+    let _ = writeln!(
+        s,
+        "Test kit:                  wsq-cli {} (wsq cert)",
         env!("CARGO_PKG_VERSION")
     );
     let _ = writeln!(s, "Internal version:          (fill in: git commit)");
@@ -229,7 +238,7 @@ fn decode(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
     }
     let options = DecodeOptions::default();
     for path in &streams {
-        let image = wsq_codec::decode_with(&fs::read(path)?, &options)
+        let image = wsq_certified::decode_with(&fs::read(path)?, &options)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let rel = path.strip_prefix(input)?.with_extension("pgm");
         write_pgm(&output.join(&rel), image.width, image.height, &image.pixels)?;
@@ -426,4 +435,20 @@ fn compare(ours: &Path, reference: &Path) -> Result<Outcome, Box<dyn Error>> {
     } else {
         Outcome::Done
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_submission_sheet_names_the_certified_version() {
+        let sheet = submission_sheet(0, Some("rustc 1.97.0\nhost: x86_64"));
+        let line = format!("wsq-certified {}", wsq_certified::VERSION);
+        assert!(sheet.contains(&line), "{sheet}");
+        assert!(sheet.contains("wsq-cli "), "{sheet}");
+        assert!(sheet.contains("(not yet assigned)"));
+        assert!(sheet.contains("rustc 1.97.0\n"));
+        assert!(submission_sheet(42, None).contains("Implementation number:     42"));
+    }
 }

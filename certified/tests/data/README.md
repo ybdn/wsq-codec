@@ -63,7 +63,7 @@ It prints one line per image and bit rate (stream length, stream hash, decoded h
 into `LARGE` and `HUGE` in `tests/nbis.rs`. If a test fails after a change, first rule out a
 generator that drifted from `make_fixtures.py`, then compare the streams byte by byte
 (`cwsq`/`dwsq`, `cmp -l`) before suspecting the codec; if the difference is one quantizer bin
-width, check that value with a high-precision evaluation, because `src/math.rs` rounds
+width, check that value with a high-precision evaluation, because `certified/src/math.rs` rounds
 correctly where glibc, which NBIS used, very rarely does not.
 
 `cwsq` and `dwsq`, NBIS's own command-line tools, build from the same sources (the image library

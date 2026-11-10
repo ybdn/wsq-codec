@@ -7,7 +7,7 @@
 //!
 //! No allocation whose size follows the pixel count (the image, the
 //! coefficients, the encoder's output, the wavelet transform's blocks)
-//! goes around these helpers. This search, run from the repository root,
+//! goes around these helpers. This search, run from the `certified/` directory,
 //! finds the infallible allocations:
 //!
 //! ```sh

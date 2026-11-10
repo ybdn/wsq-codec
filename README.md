@@ -73,7 +73,7 @@ aborting, and `decode_with` does the same on a 32-bit target for a size beyond i
 space, even with `max_pixels: None`. What stays infallible is small and does not follow the
 pixel count: tables of fixed size, the comments you give, vectors with one entry per row or
 per subband (at most 65535 rows), and the wavelet filters' per-line plans (a few MiB at the
-largest dimension). `src/mem.rs` documents the `grep` that lists them.
+largest dimension). `certified/src/mem.rs` documents the `grep` that lists them.
 
 The bit rate is a target in bits per pixel. NBIS documents 0.75, the usual choice for 500 ppi
 fingerprints, as about 15:1 compression and 2.25 as about 5:1.
@@ -272,6 +272,13 @@ The crate is not certified by the FBI. `docs/certification.md` describes the pro
 plan to pursue it, and the `cert` commands of the example, which run the certification tests
 locally and compare the output with NIST's reference files.
 
+The code a certificate would cover is split out as the [`wsq-certified`](certified/README.md)
+crate: the decoder, the conformant encoder and `inspect`, versioned with the certificate, built
+with a pinned compiler (`certified/rust-toolchain.toml`) and changed only on purpose. `wsq-codec`
+depends on it at an exact version and re-exports it, so nothing changes for its users; it adds
+the optimized profile and the `image` feature, which are not certified. The plan may change once
+NIST answers the maintainer's questions (#34).
+
 ## Differences from NBIS
 
 The encoder departs from NBIS only where NBIS's output is broken:
@@ -405,5 +412,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks to run and the branch flow
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The test fixtures in `tests/data` were written by NIST's NBIS,
-which is in the public domain; see [tests/data/README.md](tests/data/README.md).
+MIT, see [LICENSE](LICENSE). The test fixtures in `certified/tests/data` were written by NIST's NBIS,
+which is in the public domain; see [certified/tests/data/README.md](certified/tests/data/README.md).

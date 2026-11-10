@@ -1,5 +1,5 @@
 [workspace]
-members = ["cli", "wasm", "capi", "python"]
+members = ["certified", "cli", "wasm", "capi", "python"]
 
 [package]
 name = "wsq-codec"
@@ -25,6 +25,9 @@ include = [
 ]
 
 [dependencies]
+# The certified part, at one exact version: a release of this crate never moves it by itself.
+# The version is the one the FBI certificate names (see certified/README.md).
+wsq-certified = { version = "=1.0.0", path = "certified" }
 image = { version = "0.25.8", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
