@@ -74,7 +74,12 @@ for f in "${files[@]}"; do
     if ! "$nbis_bin" e "$scratch/in.raw" "$w" "$h" "$rate" 500 "$scratch/ref.wsq" > /dev/null 2>&1; then
       skipped=$((skipped + 1)); continue; fi
   else
-    cp -- "$f" "$scratch/cur.wsq"
+    # An unreadable source is skipped like any unusable file, without its name; a failure to
+    # write the scratch copy is reported (it names only the scratch directory).
+    if ! cat -- "$f" 2> /dev/null > "$scratch/cur.wsq"; then
+      [ -w "$scratch/cur.wsq" ] || { echo "cannot write to the scratch directory" >&2; exit 1; }
+      skipped=$((skipped + 1)); continue
+    fi
     w=0; h=0
     cp "$scratch/cur.wsq" "$scratch/ref.wsq"
   fi

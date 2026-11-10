@@ -272,7 +272,7 @@ def corpus_tables(calls_path, checks_path):
             med = lambda xs, s: median([xs[i] for i in s if xs[i] == xs[i]] or [float("nan")])
             tot = [sum(t[files[i]] for i in s) / sum(nb_t[files[i]] for i in s) for s in idx]
             rows.append([k[2], point_ci(median(r), [med(r, s) for s in idx], 2),
-                         point_ci(sum(t.values()) / sum(nb_t.values()), tot, 2),
+                         point_ci(sum(t[f] for f in files) / sum(nb_t[f] for f in files), tot, 2),
                          f"{sum(x < 1 for x in r)} of {len(files)}",
                          point_ci(med(rm, range(len(rm))), [med(rm, s) for s in idx], 2)])
             if k[2] != "1":
