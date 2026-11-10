@@ -114,7 +114,7 @@ fn read_block(
                     return Err(too_many);
                 }
                 if coeffs.len() == coeffs.capacity() {
-                    grow(coeffs, 1)?;
+                    mem::grow(coeffs, 1)?;
                 }
                 coeffs.push(c);
             }
@@ -123,7 +123,7 @@ fn read_block(
                 if coeffs.len() + n > max {
                     return Err(too_many);
                 }
-                grow(coeffs, n)?;
+                mem::grow(coeffs, n)?;
                 coeffs.resize(coeffs.len() + n, 0);
             }
             Item::End(marker) => return Ok(marker),
@@ -177,12 +177,6 @@ fn decode_blocks(blocks: &[Block<'_>], threads: usize) -> Option<Vec<Vec<i16>>> 
         }
     }
     decoded.into_iter().collect()
-}
-
-/// Makes room for `additional` more coefficients, growing `coeffs` by
-/// doubling as `push` does, but failing instead of aborting.
-fn grow(coeffs: &mut Vec<i16>, additional: usize) -> Result<(), OutOfMemory> {
-    coeffs.try_reserve(additional).map_err(|_| OutOfMemory)
 }
 
 /// A stream read up to its quantized coefficients.
@@ -391,7 +385,7 @@ fn render<'o>(
         &transform.lo,
         &transform.hi,
         threads,
-    );
+    )?;
     drop(tmp);
     scratch.tmp.release(scratch.keep);
 

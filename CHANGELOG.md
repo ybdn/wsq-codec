@@ -10,6 +10,13 @@
   `software` returns the new `EncodeError::SoftwareRequiresConformant`. `wsq encode` takes
   `--profile conformant|optimized`. The hidden `experimental::encode_at_rate` now delegates to
   the profile; the quality benchmark's `--optimized` mode uses the profile directly.
+- The last two infallible allocations that followed the image are fallible (#67): the encoder's
+  compressed output, reserved from the expected size and grown with `try_reserve`, and the
+  wavelet transform's transposition blocks, on the single-threaded and the multithreaded path
+  (the threads leave the transform together). A refused allocation gives
+  `EncodeError::OutOfMemory` or `DecodeError::OutOfMemory` instead of aborting; output is
+  unchanged. `src/mem.rs` documents the `grep` that checks that no infallible allocation
+  proportional to the pixel count remains, and tests refuse each allocation in turn.
 
 ## 0.2.0
 

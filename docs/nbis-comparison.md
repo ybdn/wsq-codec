@@ -167,6 +167,10 @@ program using the crate was not measured.
 
 ## Limits
 
+- **Memory figures predate #67.** They were measured before the encoder's output and the wavelet
+  transposition blocks became fallible allocations. The change adds no buffer (the output is
+  reserved from its expected size, a fraction of a byte per pixel, instead of growing by
+  doubling), but the figures were not measured again.
 - **Synthetic images.** A codec's time depends on the content (quantization, Huffman coding). No
   real fingerprint was measured, and there are only three kinds of pattern.
 - **One machine, uncontrolled load.** A 4-vCPU x86-64 virtual machine on which other processes were

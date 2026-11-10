@@ -5,6 +5,7 @@
 //! anything else can only be a marker.
 
 use crate::error::DecodeError;
+use crate::mem::{self, OutOfMemory};
 
 /// Big-endian reader over marker segments.
 pub(crate) struct ByteReader<'a> {
@@ -173,11 +174,17 @@ impl BitReader<'_, '_> {
 }
 
 /// Big-endian writer of entropy-coded data with byte stuffing.
+///
+/// The output grows fallibly: when the allocator refuses, the writer drops
+/// what it is given from then on and [`flush`](Self::flush) reports it, so
+/// that the coding loop stays free of error handling.
 pub(crate) struct BitWriter<'a> {
     out: &'a mut Vec<u8>,
     /// Bits not yet written, in the low `nbits` bits.
     acc: u64,
     nbits: u32,
+    /// The output could not grow.
+    failed: bool,
 }
 
 impl<'a> BitWriter<'a> {
@@ -186,7 +193,21 @@ impl<'a> BitWriter<'a> {
             out,
             acc: 0,
             nbits: 0,
+            failed: false,
         }
+    }
+
+    /// Room needed for one byte of code: the byte and its stuffing zero.
+    const STEP: usize = 2;
+
+    /// Makes room for another [`STEP`](Self::STEP) bytes, doubling the
+    /// output as `push` would. Returns whether there is room.
+    #[cold]
+    fn grow(&mut self) -> bool {
+        if mem::grow_output(self.out, Self::STEP.max(self.out.len())).is_err() {
+            self.failed = true;
+        }
+        !self.failed
     }
 
     /// Writes the low `size` bits of `code` (at most 16), most significant
@@ -199,6 +220,9 @@ impl<'a> BitWriter<'a> {
         while self.nbits >= 8 {
             self.nbits -= 8;
             let byte = (self.acc >> self.nbits) as u8;
+            if self.out.capacity() - self.out.len() < Self::STEP && !self.grow() {
+                return;
+            }
             self.out.push(byte);
             if byte == 0xFF {
                 self.out.push(0);
@@ -206,11 +230,17 @@ impl<'a> BitWriter<'a> {
         }
     }
 
-    /// Pads the last byte with one bits.
-    pub fn flush(mut self) {
+    /// Pads the last byte with one bits. Fails if the output could not
+    /// grow at some point.
+    pub fn flush(mut self) -> Result<(), OutOfMemory> {
         if self.nbits > 0 {
             let pad = 8 - self.nbits as u8;
             self.put((1 << pad) - 1, pad);
+        }
+        if self.failed {
+            Err(OutOfMemory)
+        } else {
+            Ok(())
         }
     }
 }
@@ -223,7 +253,7 @@ mod tests {
         let mut out = Vec::new();
         let mut w = BitWriter::new(&mut out);
         f(&mut w);
-        w.flush();
+        w.flush().unwrap();
         out
     }
 
@@ -359,7 +389,7 @@ mod tests {
         let mut w = BitWriter::new(&mut out);
         w.put(0xFF, 8);
         w.put(0b101, 3);
-        w.flush();
+        w.flush().unwrap();
         out.extend_from_slice(&[0xFF, 0xA1]);
         assert_eq!(out, [0xFF, 0x00, 0b1011_1111, 0xFF, 0xA1]);
 
