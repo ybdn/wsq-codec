@@ -367,7 +367,7 @@ struct Nbis {
     same_pixels: bool,
 }
 
-/// The experimental encoder against the conformant one at equal size.
+/// The `Optimized` profile against the conformant encoder at equal size.
 struct Optimized {
     measure: Measure,
     /// Requested rate that gives the conformant stream closest in length.

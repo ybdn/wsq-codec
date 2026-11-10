@@ -1,7 +1,17 @@
+use std::error::Error;
 use std::fmt;
 
 /// Why a WSQ stream could not be decoded.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The enum and its struct variants are `#[non_exhaustive]`: match with a
+/// wildcard arm and, in the pattern of a struct variant, `..`, so that later
+/// versions can add variants and context to them. A tuple variant holds the
+/// one value that identifies the error and does not change.
+///
+/// The text of [`Display`](fmt::Display), and the `&'static str` reasons the
+/// variants carry, describe the error for people and may be reworded in any
+/// release: match on the variants, not on the text.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The data does not start with the WSQ start-of-image marker.
@@ -11,6 +21,7 @@ pub enum DecodeError {
     /// A marker appeared where the format does not allow it.
     UnexpectedMarker(u16),
     /// A marker segment is malformed.
+    #[non_exhaustive]
     InvalidSegment {
         /// The marker that introduced the segment.
         marker: u16,
@@ -22,10 +33,14 @@ pub enum DecodeError {
     /// A block refers to a Huffman table that was not defined.
     UndefinedHuffmanTable(u8),
     /// The frame header gives a zero width or height.
+    #[non_exhaustive]
     InvalidDimensions {
-        /// Width from the frame header.
+        /// Width from the frame header (at most
+        /// [`MAX_DIMENSION`](crate::MAX_DIMENSION), as the header field has
+        /// 16 bits).
         width: usize,
-        /// Height from the frame header.
+        /// Height from the frame header (at most
+        /// [`MAX_DIMENSION`](crate::MAX_DIMENSION)).
         height: usize,
     },
     /// The entropy-coded data is corrupt.
@@ -34,6 +49,7 @@ pub enum DecodeError {
     /// allows.
     ///
     /// [`DecodeOptions::max_pixels`]: crate::DecodeOptions::max_pixels
+    #[non_exhaustive]
     TooLarge {
         /// Width from the frame header.
         width: usize,
@@ -46,6 +62,7 @@ pub enum DecodeError {
     /// per pixel.
     ///
     /// [`decode_into`]: crate::decode_into
+    #[non_exhaustive]
     OutputSize {
         /// `width * height` of the image.
         expected: usize,
@@ -96,14 +113,23 @@ impl fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl Error for DecodeError {}
 
 /// Why an image could not be encoded.
+///
+/// `Eq` is not implemented, since two variants hold an `f32`. The enum and
+/// its struct variants are `#[non_exhaustive]`, and the text of
+/// [`Display`](fmt::Display) may change, as for [`DecodeError`], which
+/// explains how to match.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum EncodeError {
-    /// The image is smaller than the wavelet decomposition needs, or
-    /// larger than the format can describe.
+    /// A dimension is outside
+    /// [`MIN_ENCODE_DIMENSION`](crate::MIN_ENCODE_DIMENSION) to
+    /// [`MAX_DIMENSION`](crate::MAX_DIMENSION): the image is smaller than
+    /// the wavelet decomposition needs, or larger than the format can
+    /// describe.
+    #[non_exhaustive]
     InvalidDimensions {
         /// Requested width.
         width: usize,
@@ -111,6 +137,7 @@ pub enum EncodeError {
         height: usize,
     },
     /// The pixel buffer does not hold `width * height` bytes.
+    #[non_exhaustive]
     PixelCountMismatch {
         /// `width * height`.
         expected: usize,
@@ -122,7 +149,7 @@ pub enum EncodeError {
     /// The bit rate is so low that a quantizer bin width does not fit in
     /// the quantization table.
     BitrateTooLow(f32),
-    /// A comment does not fit in one marker segment.
+    /// A comment does not fit in one marker segment. Holds its length.
     CommentTooLong(usize),
     /// The resolution is zero.
     InvalidPpi,
@@ -159,9 +186,16 @@ impl fmt::Display for EncodeError {
     }
 }
 
-impl std::error::Error for EncodeError {}
+impl Error for EncodeError {}
 
 /// Why a WSQ stream could not be read and decoded.
+///
+/// [`Io`](Self::Io) describes itself and has the I/O error as its
+/// [`source`](Error::source). [`Decode`](Self::Decode) is transparent: it
+/// displays as the [`DecodeError`] it holds and reports that error's own
+/// source (none), so that a report which walks the chain of sources does not
+/// print the same message twice. It is neither `Clone` nor `PartialEq`, since
+/// [`std::io::Error`] is neither.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ReadError {
@@ -174,17 +208,17 @@ pub enum ReadError {
 impl fmt::Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReadError::Io(e) => write!(f, "cannot read WSQ data: {e}"),
+            ReadError::Io(_) => f.write_str("cannot read WSQ data"),
             ReadError::Decode(e) => e.fmt(f),
         }
     }
 }
 
-impl std::error::Error for ReadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl Error for ReadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             ReadError::Io(e) => Some(e),
-            ReadError::Decode(e) => Some(e),
+            ReadError::Decode(e) => e.source(),
         }
     }
 }
@@ -202,6 +236,9 @@ impl From<DecodeError> for ReadError {
 }
 
 /// Why an image could not be encoded and written.
+///
+/// Like [`ReadError`]: [`Io`](Self::Io) describes itself and has the I/O
+/// error as its source, and [`Encode`](Self::Encode) is transparent.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WriteError {
@@ -214,17 +251,17 @@ pub enum WriteError {
 impl fmt::Display for WriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WriteError::Io(e) => write!(f, "cannot write WSQ data: {e}"),
+            WriteError::Io(_) => f.write_str("cannot write WSQ data"),
             WriteError::Encode(e) => e.fmt(f),
         }
     }
 }
 
-impl std::error::Error for WriteError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl Error for WriteError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             WriteError::Io(e) => Some(e),
-            WriteError::Encode(e) => Some(e),
+            WriteError::Encode(e) => e.source(),
         }
     }
 }

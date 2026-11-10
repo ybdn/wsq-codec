@@ -98,8 +98,8 @@ not what NBIS writes for the requested rate, so they are never conformant.
 
 The images and the rates are those of the tables above, one thread, fastest of three runs.
 "Equal size" is the conformant encoder at the requested rate, found by bisection, whose stream is
-closest in length to the experimental one; its PSNR and SSIM are those of that stream. The last
-column compares NBIS's `dwsq` reconstruction of the experimental stream with this crate's.
+closest in length to the Optimized one; its PSNR and SSIM are those of that stream. The last
+column compares NBIS's `dwsq` reconstruction of the Optimized stream with this crate's.
 
 ### Per image and bit rate
 
@@ -135,7 +135,7 @@ column compares NBIS's `dwsq` reconstruction of the experimental stream with thi
 | 1 | 5 | 0.9977 | -0.37% / -0.07% | 24.67 | +0.000 | +0.0000 | 1.76 |
 | 2.25 | 5 | 2.2447 | -0.43% / -0.02% | 27.87 | +0.000 | +0.0000 | 3.02 |
 
-The time ratio is the sum of the experimental encoding times over the sum of the conformant ones
+The time ratio is the sum of the Optimized encoding times over the sum of the conformant ones
 at the same requested rate, on a loaded machine: it says the order of magnitude of the cost of the
 search (one quantization and one Huffman coding per stream tried), not a figure to quote.
 
@@ -150,7 +150,7 @@ search (one quantization and one Huffman coding per stream tried), not a figure 
   constant that depends on the requested rate (`src/quant.rs`, `bin_widths`), so scaling all the
   widths by one factor stays within the family of conformant encodings at other requested rates.
   The gain is in hitting the size, not in quality at a given size.
-- NBIS's `dwsq` decodes the 20 experimental streams to the same pixels as this crate. JNBIS was
+- NBIS's `dwsq` decodes the 20 Optimized streams to the same pixels as this crate. JNBIS was
   not run for this table.
 - The images are synthetic patterns, not fingerprints; one machine, under load.
 

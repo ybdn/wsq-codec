@@ -30,10 +30,36 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Dimensions
+//!
+//! Widths and heights are `usize` throughout, to match slice lengths and the
+//! `width * height` arithmetic, but the format stores them in 16 bits: no
+//! stream and no image this crate handles exceeds [`MAX_DIMENSION`] (65535)
+//! on a side. The encoder also refuses images under
+//! [`MIN_ENCODE_DIMENSION`] (81) on a side. Bindings and converters can
+//! therefore narrow a dimension to `u16` after a successful call, and must
+//! check it before an encoding.
+//!
+//! # Stability
+//!
+//! From 1.0 the public API follows semantic versioning: the items this
+//! documentation lists, their signatures, the variants and fields of the
+//! types, the output of the conformant encoder (byte for byte), the decoded
+//! pixels, and the `image` feature's API. Four things are not covered and may
+//! change in a minor release: the exact bytes of the
+//! [`Optimized`](Profile::Optimized) profile's streams (its promises about
+//! size are covered), the text of error messages and the `&'static str`
+//! reasons of [`DecodeError`], the `Debug` output of any type, and speed and
+//! memory use. Minimum Supported Rust Version bumps are minor releases. The
+//! `image` feature exposes the `image` 0.25 crate's types: a new `image`
+//! major version will come as a new feature, not as a change to this one. See
+//! `docs/api-1.0.md` in the repository for the review behind this API.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
 mod bits;
 mod decode;
@@ -60,15 +86,28 @@ pub use error::{DecodeError, EncodeError, ReadError, WriteError};
 /// covers a 1000 ppi palm print (about 44 million) with room to spare.
 pub const DEFAULT_MAX_PIXELS: usize = 100_000_000;
 
+/// Largest width or height of a WSQ image, 65535: the frame header stores
+/// each in 16 bits. Dimensions are `usize` in this API, but never exceed this.
+pub const MAX_DIMENSION: usize = 65535;
+
+/// Smallest width and height [`encode`] accepts, 81. Below it some subbands
+/// are too small for the variance estimate that drives quantization. The
+/// decoder has no such limit.
+pub const MIN_ENCODE_DIMENSION: usize = encode::MIN_DIMENSION;
+
 /// A decoded 8-bit grayscale image, with what its stream says about it, so
 /// that [`decode`] alone gives the pixels and the metadata (no second
 /// [`read_info`] call is needed).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The metadata fields repeat those of [`Info`] one for one, and stay flat
+/// rather than nested in an `info` field, so that `image.width` reads as it
+/// does on the image of any other crate.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Image {
-    /// Width in pixels, at most 65535 as the format allows.
+    /// Width in pixels, from 1 to [`MAX_DIMENSION`] (65535).
     pub width: usize,
-    /// Height in pixels, at most 65535 as the format allows.
+    /// Height in pixels, from 1 to [`MAX_DIMENSION`] (65535).
     pub height: usize,
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.
@@ -84,12 +123,12 @@ pub struct Image {
 }
 
 /// What a WSQ stream says about its image, read without decoding it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Info {
-    /// Width in pixels, at most 65535 as the format allows.
+    /// Width in pixels, from 1 to [`MAX_DIMENSION`] (65535).
     pub width: usize,
-    /// Height in pixels, at most 65535 as the format allows.
+    /// Height in pixels, from 1 to [`MAX_DIMENSION`] (65535).
     pub height: usize,
     /// Scanning resolution in pixels per inch, when the stream records it
     /// in a NISTCOM comment.
@@ -107,7 +146,7 @@ pub struct Info {
 /// let options = wsq_codec::DecodeOptions::default().with_max_pixels(Some(20_000_000));
 /// # let _ = options;
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct DecodeOptions {
     /// Largest `width * height` the decoder accepts, or `None` for no
@@ -381,6 +420,8 @@ pub fn decode_into(
 
 /// A decoder that keeps its working buffers from one image to the next.
 ///
+/// `Decoder::default()` uses the default [`DecodeOptions`].
+///
 /// Decoding needs two buffers of 4 bytes per pixel besides the output.
 /// [`decode_with`] allocates them for every image; a `Decoder` allocates
 /// them once and keeps them, as large as the largest image so far, which
@@ -407,13 +448,27 @@ pub struct Decoder {
     scratch: wavelet::Scratch,
 }
 
+impl Default for Decoder {
+    /// A decoder using the default [`DecodeOptions`].
+    fn default() -> Self {
+        Decoder::new(DecodeOptions::default())
+    }
+}
+
 impl Decoder {
     /// A decoder using `options` for every image.
+    #[must_use]
     pub fn new(options: DecodeOptions) -> Self {
         Decoder {
             options,
             scratch: wavelet::Scratch::kept(),
         }
+    }
+
+    /// The options every image is decoded with.
+    #[must_use]
+    pub fn options(&self) -> &DecodeOptions {
+        &self.options
     }
 
     /// Decodes a WSQ stream, as [`decode_with`] does.
@@ -527,13 +582,27 @@ pub struct Encoder {
     scratch: wavelet::Scratch,
 }
 
+impl Default for Encoder {
+    /// An encoder using the default [`EncodeOptions`].
+    fn default() -> Self {
+        Encoder::new(EncodeOptions::default())
+    }
+}
+
 impl Encoder {
     /// An encoder using `options` for every image.
+    #[must_use]
     pub fn new(options: EncodeOptions) -> Self {
         Encoder {
             options,
             scratch: wavelet::Scratch::kept(),
         }
+    }
+
+    /// The options every image is encoded with.
+    #[must_use]
+    pub fn options(&self) -> &EncodeOptions {
+        &self.options
     }
 
     /// Encodes an image, as [`encode`] does.
@@ -567,37 +636,4 @@ pub fn encode_to<W: std::io::Write>(
     writer.write_all(&encode(pixels, width, height, options)?)?;
     writer.flush()?;
     Ok(())
-}
-
-/// Experimental entry points outside the reference implementation, kept
-/// for the benchmarks.
-///
-/// Nothing here is covered by semantic versioning: it may change or go in
-/// any release. Use [`Profile::Optimized`] instead.
-#[doc(hidden)]
-pub mod experimental {
-    use crate::{EncodeError, EncodeOptions, Profile, encode};
-
-    /// Same as [`Profile::OPTIMIZED_TOLERANCE`].
-    pub const RATE_TOLERANCE: f64 = Profile::OPTIMIZED_TOLERANCE;
-
-    /// Encodes an image with [`Profile::Optimized`], whatever
-    /// `options.profile` says, and with implementation number 0 whatever
-    /// `options.software` says (the prototype of #42 ignored it).
-    ///
-    /// # Errors
-    ///
-    /// Returns the [`EncodeError`] that [`encode`] gives.
-    pub fn encode_at_rate(
-        pixels: &[u8],
-        width: usize,
-        height: usize,
-        options: &EncodeOptions,
-    ) -> Result<Vec<u8>, EncodeError> {
-        let options = options
-            .clone()
-            .with_profile(Profile::Optimized)
-            .with_software(0);
-        encode(pixels, width, height, &options)
-    }
 }

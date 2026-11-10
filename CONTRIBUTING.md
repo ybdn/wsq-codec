@@ -29,6 +29,12 @@ cargo test --doc --features image
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features image
 ```
 
+From 1.0 the public API is frozen (`docs/api-1.0.md`): CI runs `cargo semver-checks check-release
+-p wsq-codec --all-features` against the latest release on crates.io (install with `cargo install
+--locked cargo-semver-checks`). A change it reports as breaking needs a discussion first, and a
+major version. Adding to the API is fine; mark new public structs and enums `#[non_exhaustive]`
+and document the errors a new function returns (clippy enforces it).
+
 Optionally, `cargo deny check` (install with `cargo install --locked cargo-deny`) runs the
 supply-chain checks CI runs.
 
@@ -55,7 +61,9 @@ Maintainers only. A release is published by the `Release` workflow when a `v*` t
 on `main`; nobody publishes from a personal machine.
 
 1. On `develop`, set `version` in `Cargo.toml`, rename the `Unreleased` section of
-   `CHANGELOG.md` to the version, and open a pull request to `main`.
+   `CHANGELOG.md` to the version (a line `## X.Y.Z`, as the workflow looks for it exactly) and
+   leave an empty `## Unreleased` above it, and open a pull request to `main`. A minimum Rust
+   version bump is a minor release, noted in the changelog.
 2. Once it is merged, tag the merge commit and push the tag:
    `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The workflow checks that the tag matches `Cargo.toml` and that `CHANGELOG.md` has a section

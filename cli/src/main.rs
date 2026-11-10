@@ -153,7 +153,14 @@ fn main() {
         _ => {}
     }
     if let Err(e) = run(&args) {
-        eprintln!("wsq: {e}");
+        // The error and its causes, as `ReadError::Io` keeps the I/O error as its source.
+        let mut message = format!("wsq: {e}");
+        let mut source = e.source();
+        while let Some(cause) = source {
+            message.push_str(&format!(": {cause}"));
+            source = cause.source();
+        }
+        eprintln!("{message}");
         process::exit(1);
     }
 }
