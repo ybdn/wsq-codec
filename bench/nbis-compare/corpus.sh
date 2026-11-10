@@ -58,9 +58,15 @@ same() { if cmp -s "$1" "$2"; then echo 1; else echo 0; fi; }
 n=${#impls[@]}
 idx=0; skipped=0; used=0; failed_calls=0
 files=()
-while IFS= read -r -d '' f; do files+=("$f"); done < <(
-  LC_ALL=C find "$corpus" -type f \( -iname '*.pgm' -o -iname '*.wsq' \) -print0 2> /dev/null |
-    LC_ALL=C sort -z)  # find's diagnostics would name unreadable corpus directories
+# find's diagnostics would name unreadable corpus directories, so they are dropped; a traversal
+# that did not complete stops the run rather than report a partial corpus as the whole one.
+if ! LC_ALL=C find "$corpus" -type f \( -iname '*.pgm' -o -iname '*.wsq' \) -print0 \
+  2> /dev/null > "$scratch/list"; then
+  echo "cannot read the whole corpus directory (an unreadable subdirectory?); nothing measured" >&2
+  exit 1
+fi
+while IFS= read -r -d '' f; do files+=("$f"); done < <(LC_ALL=C sort -z "$scratch/list")
+rm -f "$scratch/list"
 total=${#files[@]}
 [ "$total" -gt 0 ] || { echo "no .pgm or .wsq file found in the corpus" >&2; exit 1; }
 echo "corpus mode: $total candidate files, $reps timed calls each (no names are printed)" >&2

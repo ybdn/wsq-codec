@@ -656,7 +656,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             fs::write(dir.join(format!("{}.pgm", src.name)), pgm(src))?;
         }
     }
-    let work = env::temp_dir().join(format!("wsq-quality-{}", process::id()));
+    let work = private_work_dir()?;
     let fp_work = work.join("fingerprint");
     let encode_options = |rate: f32| {
         EncodeOptions::default()
@@ -1202,4 +1202,18 @@ fn main() {
         eprintln!("quality: {e}");
         process::exit(1);
     }
+}
+
+/// The work directory for the images handed to NBIS and the external tools, which may be real
+/// fingerprints (`WSQ_QUALITY_DIR`): created afresh (an existing path is an error, so nothing
+/// prepared by someone else is reused) and, on Unix, readable by its owner only.
+fn private_work_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let work = env::temp_dir().join(format!("wsq-quality-{}", process::id()));
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&work).map_err(|e| {
+        format!("cannot create a private work directory in the temporary directory: {e}")
+    })?;
+    Ok(work)
 }
