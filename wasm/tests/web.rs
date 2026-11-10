@@ -8,7 +8,7 @@ use wasm_bindgen_test::wasm_bindgen_test;
 use wsq_wasm::{JsEncodeOptions, decode, encode, read_info};
 
 /// A synthetic NBIS-encoded stream of the codec's own fixtures: 101 by 97 pixels.
-const FIXTURE: &[u8] = include_bytes!("../../tests/data/checker_101x97.wsq");
+const FIXTURE: &[u8] = include_bytes!("../../certified/tests/data/checker_101x97.wsq");
 
 /// Diagonal ridges, 150 by 130 pixels.
 fn ridges(width: u32, height: u32) -> Vec<u8> {

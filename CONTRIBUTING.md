@@ -88,7 +88,7 @@ cd python && maturin develop --release && pytest
 ```
 
 `python/tests` holds the round-trip tests; they compare the conformant encoder with the NBIS
-fixtures in `tests/data`. The core crate takes no dependency for the bindings: PyO3 and `numpy`
+fixtures in `certified/tests/data`. The core crate takes no dependency for the bindings: PyO3 and `numpy`
 are dependencies of `wsq-python` only.
 
 Optionally, `cargo deny check` (install with `cargo install --locked cargo-deny`) runs the
