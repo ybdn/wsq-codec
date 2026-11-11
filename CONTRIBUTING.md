@@ -145,7 +145,7 @@ configuration on crates.io. Before the first release that includes `wsq-certifie
 has to publish the crate (crates.io lets one configure Trusted Publishing for an existing crate;
 if it does not offer a pending configuration for a new one, the first `wsq-certified` upload is a
 manual `cargo publish -p wsq-certified` with a temporary token) and then add the publisher in
-the crate's settings: repository `ybdn-ei/wsq-codec`, workflow `release.yml`, the same settings as
+the crate's settings: repository `ybdn/wsq-codec`, workflow `release.yml`, the same settings as
 for `wsq-codec`. Until then the `Publish wsq-certified` step fails and nothing is published.
 
 The workflow can also be started by hand with `dry_run` set (the default for a manual run): it
@@ -159,13 +159,14 @@ runs every check and `cargo publish --dry-run` without publishing anything.
    rights on new packages, short expiry) and store it as the repository secret `NPM_TOKEN`; the
    `npm` job of `release.yml` uses it when it is set. Right after the first publish, open the
    package's Settings on npmjs.com, add a Trusted Publisher (GitHub Actions, repository
-   `ybdn-ei/wsq-codec`, workflow `release.yml`, no environment), then delete the `NPM_TOKEN`
+   `ybdn/wsq-codec`, workflow `release.yml`, no environment), then delete the `NPM_TOKEN`
    secret and revoke the token. Later releases authenticate through OIDC and carry a provenance
-   statement. (An organization scope such as `@ybdn-ei/wsq-codec` would need the organization on
-   npm; change `name` in `wasm/package.template.json` and the README if you prefer it.)
-2. **GitHub Pages.** In the repository's Settings > Pages, set Source to "GitHub Actions". The
-   `Pages` workflow then deploys `wasm/demo` on every push to `main` (or when started by hand),
-   at <https://ybdn-ei.github.io/wsq-codec/>.
+   statement. (A scope such as `@ybdn/wsq-codec` is possible too; change `name` in
+   `wasm/package.template.json` and the README if you prefer it.)
+2. **GitHub Pages.** In the repository's Settings > Pages, set Source to "GitHub Actions" and
+   Custom domain to `wsq-codec.ybdn.io` (DNS: a `CNAME` record `wsq-codec` pointing to
+   `ybdn.github.io`). The `Pages` workflow then deploys `wasm/demo` on every push to `main` (or
+   when started by hand), at <https://wsq-codec.ybdn.io/>.
 
 ### One-time setup for PyPI
 
@@ -177,7 +178,7 @@ stored as a secret: PyPI trusts the workflow through OIDC, as crates.io does.
    with deployment restricted to `v*` tags).
 2. On PyPI, log in with the account that will own the project and, in Account settings,
    Publishing, add a *pending publisher* (the project does not exist until the first upload):
-   project name `wsq-codec`, owner `ybdn-ei`, repository `wsq-codec`, workflow name
+   project name `wsq-codec`, owner `ybdn`, repository `wsq-codec`, workflow name
    `release.yml`, environment name `pypi`. After the first release the pending publisher
    becomes a normal Trusted Publisher of the project.
 3. Check that the name is still free (`curl -s -o /dev/null -w '%{http_code}\n'

@@ -26,10 +26,10 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/ybdn-ei/wsq-codec"
-Repository = "https://github.com/ybdn-ei/wsq-codec"
-Changelog = "https://github.com/ybdn-ei/wsq-codec/blob/main/CHANGELOG.md"
-Issues = "https://github.com/ybdn-ei/wsq-codec/issues"
+Homepage = "https://github.com/ybdn/wsq-codec"
+Repository = "https://github.com/ybdn/wsq-codec"
+Changelog = "https://github.com/ybdn/wsq-codec/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ybdn/wsq-codec/issues"
 
 [tool.maturin]
 module-name = "wsq_codec._wsq_codec"

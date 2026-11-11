@@ -2,7 +2,7 @@
 
 Decoder and encoder for WSQ (Wavelet Scalar Quantization) fingerprint images, the format of
 FBI and ANSI/NIST-ITL fingerprint transactions. These are the Python bindings of the Rust crate
-[`wsq-codec`](https://github.com/ybdn-ei/wsq-codec): the conformant encoder writes byte for
+[`wsq-codec`](https://github.com/ybdn/wsq-codec): the conformant encoder writes byte for
 byte what NIST's NBIS writes, and the decoder returns NBIS's pixels. No system library is
 needed.
 
@@ -52,4 +52,4 @@ Never put real fingerprints in bug reports or tests: they are biometric data.
 ## Licence and source
 
 MIT. Source, issues, the format notes and the certification status are in the
-[repository](https://github.com/ybdn-ei/wsq-codec).
+[repository](https://github.com/ybdn/wsq-codec).
