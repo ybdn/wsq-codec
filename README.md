@@ -1,6 +1,6 @@
 # wsq-codec
 
-[![CI](https://github.com/ybdn-ei/wsq-codec/actions/workflows/ci.yml/badge.svg)](https://github.com/ybdn-ei/wsq-codec/actions/workflows/ci.yml)
+[![CI](https://github.com/ybdn/wsq-codec/actions/workflows/ci.yml/badge.svg)](https://github.com/ybdn/wsq-codec/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/wsq-codec.svg)](https://crates.io/crates/wsq-codec)
 [![docs.rs](https://img.shields.io/docsrs/wsq-codec)](https://docs.rs/wsq-codec)
 [![license: MIT](https://img.shields.io/crates/l/wsq-codec.svg)](LICENSE)
@@ -170,7 +170,7 @@ answered 404 (the name was free); `wsq` answered 200.
 ## Command line
 
 The `wsq` tool (crate `wsq-cli`, in `cli/`) converts between binary PGM and WSQ. Install it with
-`cargo install wsq-cli` (or `cargo install --git https://github.com/ybdn-ei/wsq-codec wsq-cli`);
+`cargo install wsq-cli` (or `cargo install --git https://github.com/ybdn/wsq-codec wsq-cli`);
 `wsq --help` lists the commands:
 
 ```sh
@@ -193,7 +193,7 @@ const image = decode(wsqBytes);   // { width, height, ppi, software, comments, p
 const wsq = encode(image.pixels, image.width, image.height, { bitrate: 0.75, profile: "optimized" });
 ```
 
-The [demo page](https://ybdn-ei.github.io/wsq-codec/) opens `.wsq` files and converts PNG or JPEG
+The [demo page](https://wsq-codec.ybdn.io/) opens `.wsq` files and converts PNG or JPEG
 to WSQ in your browser: no file is uploaded, and a Content-Security-Policy lets the page load
 only its own files. See [wasm/README.md](wasm/README.md) for the API and how to build it
 (`wasm/build.sh`).

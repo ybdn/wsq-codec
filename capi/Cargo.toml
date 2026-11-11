@@ -5,8 +5,8 @@ edition = "2024"
 rust-version = "1.85"
 description = "C API for wsq-codec: libwsq (static and shared library) and wsq.h"
 license = "MIT"
-repository = "https://github.com/ybdn-ei/wsq-codec"
-homepage = "https://github.com/ybdn-ei/wsq-codec"
+repository = "https://github.com/ybdn/wsq-codec"
+homepage = "https://github.com/ybdn/wsq-codec"
 readme = "README.md"
 # Shipped as prebuilt libraries on the GitHub releases, not on crates.io: a C program cannot
 # use a crate, and the header is generated, so a source package would add nothing.
