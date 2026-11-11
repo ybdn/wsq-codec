@@ -22,7 +22,7 @@ The library decodes to the same pixels as NBIS and its conformant encoder writes
 
 ## Getting it
 
-- **Prebuilt**: each [GitHub release](https://github.com/ybdn-ei/wsq-codec/releases) attaches
+- **Prebuilt**: each [GitHub release](https://github.com/ybdn/wsq-codec/releases) attaches
   `wsq-capi-vX.Y.Z-TARGET.tar.gz` (`.zip` for Windows) for `x86_64-unknown-linux-gnu`,
   `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin` (Apple silicon) and
   `x86_64-pc-windows-msvc`, where `vX.Y.Z` is the release tag. Each holds `include/wsq.h`, the

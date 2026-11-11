@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Links point to the repository at `github.com/ybdn/wsq-codec` (crate, npm and PyPI metadata,
+  README, documentation) and to the demo at <https://wsq-codec.ybdn.io/>. `wsq-certified` keeps
+  its old repository link until its next version, since any change to its manifest needs one.
+
 ## 1.0.0
 
 The public API is reviewed and frozen (#45); `docs/api-1.0.md` records each decision. From this

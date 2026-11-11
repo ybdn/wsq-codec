@@ -2,12 +2,12 @@
 
 Decode and encode [WSQ](https://en.wikipedia.org/wiki/Wavelet_scalar_quantization) (Wavelet
 Scalar Quantization) fingerprint images in the browser or in Node.js. It is the pure-Rust
-[`wsq-codec`](https://github.com/ybdn-ei/wsq-codec) crate compiled to WebAssembly, with a thin
+[`wsq-codec`](https://github.com/ybdn/wsq-codec) crate compiled to WebAssembly, with a thin
 [wasm-bindgen](https://github.com/rustwasm/wasm-bindgen) wrapper: the same code, the same
 bytes out (the default encoder reproduces NIST's reference encoder byte for byte), no
 dependency, no server.
 
-**Try it without installing anything:** the [demo page](https://ybdn-ei.github.io/wsq-codec/)
+**Try it without installing anything:** the [demo page](https://wsq-codec.ybdn.io/)
 opens `.wsq` files and converts PNG/JPEG to WSQ entirely in your browser. No file is uploaded,
 and a Content-Security-Policy makes sure the page cannot send one.
 
