@@ -1,4 +1,4 @@
-# Pull requests into develop/main only: a merge replays nothing, the PR was
+# Pull requests into develop/preprod/prod only: a merge replays nothing, the PR was
 # checked. `changes` classifies the diff; every job is skipped when its files
 # did not change, and `ci` is the one status to require. On a release
 # (workflow_call) everything runs.
@@ -6,7 +6,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [develop, preprod, prod]
   workflow_call:
   workflow_dispatch:
 

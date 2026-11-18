@@ -1,12 +1,12 @@
 name: Pages
 
 # Deploys the demo (wasm/demo) to GitHub Pages: a static page that decodes and encodes WSQ in
-# the browser with the WebAssembly build, no server involved. `main` only receives releases, so
+# the browser with the WebAssembly build, no server involved. `prod` only receives releases, so
 # the demo shows the latest release. One-time setup: Settings > Pages > Source: GitHub Actions.
 
 on:
   push:
-    branches: [main]
+    branches: [prod]
   workflow_dispatch:
 
 permissions:

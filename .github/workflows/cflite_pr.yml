@@ -5,7 +5,7 @@ name: ClusterFuzzLite (pull requests)
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [develop, preprod, prod]
     paths:
       - "src/**"
       - "certified/**"

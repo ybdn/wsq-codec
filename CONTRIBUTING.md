@@ -12,7 +12,7 @@ Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes, not i
 ## Branches
 
 Work goes into `develop` through pull requests, from branches named `feat/...`, `fix/...`,
-`docs/...` or `ci/...`. `main` only receives releases, from `develop`.
+`docs/...` or `ci/...`. `preprod` only receives `develop`, and `prod` only receives releases, from `preprod`.
 
 ## Before a commit
 
@@ -115,7 +115,7 @@ docs: ...    ci: ...    feat: ...    chore: ...
 ## Releasing
 
 Maintainers only. A release is published by the `Release` workflow when a `v*` tag is pushed
-on `main`; nobody publishes from a personal machine.
+on `prod`; nobody publishes from a personal machine.
 
 1. On `develop`, set `version` in `Cargo.toml` (`wsq-codec`; the version of `wsq-certified`
    changes only with a certification, see above), in `wasm/Cargo.toml` (the npm package takes
@@ -123,7 +123,7 @@ on `main`; nobody publishes from a personal machine.
    the Python package takes the crate's version), and the `version` of the `path` dependencies on
    `wsq-codec` in `cli/Cargo.toml` and `wasm/Cargo.toml`; rename the `Unreleased` section of
    `CHANGELOG.md` to the version (a line `## X.Y.Z`, as the workflow looks for it exactly) and
-   leave an empty `## Unreleased` above it, and open a pull request to `main`. A minimum Rust
+   leave an empty `## Unreleased` above it, and open a pull request to `preprod`, then one from `preprod` to `prod`. A minimum Rust
    version bump is a minor release, noted in the changelog.
 2. Once it is merged, tag the merge commit and push the tag:
    `git tag vX.Y.Z && git push origin vX.Y.Z`.
@@ -137,8 +137,8 @@ on `main`; nobody publishes from a personal machine.
    the same version; the Python wheels (Linux x86-64 and AArch64, macOS Apple silicon and Intel,
    Windows x64) and the source distribution are built, checked with `twine check` and published to
    PyPI through Trusted Publishing from the `pypi` environment; and the C library is attached to
-   the GitHub release. The `Pages` workflow redeploys the demo when `main` is updated.
-4. Merge `main` back into `develop`.
+   the GitHub release. The `Pages` workflow redeploys the demo when `prod` is updated.
+4. Merge `prod` back into `develop`.
 
 **Trusted Publishing for `wsq-certified`.** Each crate has its own Trusted Publishing
 configuration on crates.io. Before the first release that includes `wsq-certified`, the owner
@@ -165,7 +165,7 @@ runs every check and `cargo publish --dry-run` without publishing anything.
    `wasm/package.template.json` and the README if you prefer it.)
 2. **GitHub Pages.** In the repository's Settings > Pages, set Source to "GitHub Actions" and
    Custom domain to `wsq-codec.ybdn.io` (DNS: a `CNAME` record `wsq-codec` pointing to
-   `ybdn.github.io`). The `Pages` workflow then deploys `wasm/demo` on every push to `main` (or
+   `ybdn.github.io`). The `Pages` workflow then deploys `wasm/demo` on every push to `prod` (or
    when started by hand), at <https://wsq-codec.ybdn.io/>.
 
 ### One-time setup for PyPI
