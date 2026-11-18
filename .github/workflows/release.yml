@@ -2,10 +2,10 @@ name: Release
 
 # Publishes to crates.io, to npm (the WebAssembly package `wsq-codec`, wasm/, with provenance)
 # and to PyPI (the `wsq-codec` Python package, python/), all through Trusted Publishing (OIDC),
-# when a `v*` tag is pushed on `main`, and attaches the C library (capi/) to the GitHub release.
+# when a `v*` tag is pushed on `prod`, and attaches the C library (capi/) to the GitHub release.
 # A manual run does every check, `cargo publish --dry-run`, `npm publish --dry-run`, builds the
 # wheels and the source distribution, and never publishes: publishing is irreversible and only a
-# tag on main may do it.
+# tag on prod may do it.
 #
 # Two crates are published: `wsq-certified` first (only when its version, in certified/Cargo.toml,
 # is not on crates.io yet: it changes with a certification, not with every release), then
@@ -53,8 +53,8 @@ jobs:
               echo "::error::tag $REF_NAME does not match version $version in Cargo.toml"
               exit 1
             fi
-            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-              echo "::error::tag $REF_NAME is not on main"
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/prod; then
+              echo "::error::tag $REF_NAME is not on prod"
               exit 1
             fi
           fi

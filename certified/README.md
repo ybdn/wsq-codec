@@ -7,7 +7,7 @@ compares streams with. Pure Rust, no `unsafe` (`#![forbid(unsafe_code)]`), no de
 
 > **Not certified yet.** This crate is split out so that it can be. NIST has not answered the
 > maintainer's questions about the certification (issue #34), so nothing has been submitted, and
-> the plan in [`docs/certification.md`](https://github.com/ybdn/wsq-codec/blob/main/docs/certification.md) may change once it does.
+> the plan in [`docs/certification.md`](https://github.com/ybdn/wsq-codec/blob/prod/docs/certification.md) may change once it does.
 
 **Most users want [`wsq-codec`](https://crates.io/crates/wsq-codec)**, which depends on this
 crate, re-exports all of it (`wsq_codec::decode`, `wsq_codec::encode`, `wsq_codec::inspect`, ...)

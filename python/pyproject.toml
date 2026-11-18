@@ -28,7 +28,7 @@ dynamic = ["version"]
 [project.urls]
 Homepage = "https://github.com/ybdn/wsq-codec"
 Repository = "https://github.com/ybdn/wsq-codec"
-Changelog = "https://github.com/ybdn/wsq-codec/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/ybdn/wsq-codec/blob/prod/CHANGELOG.md"
 Issues = "https://github.com/ybdn/wsq-codec/issues"
 
 [tool.maturin]
