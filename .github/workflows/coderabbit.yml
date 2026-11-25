@@ -1,0 +1,28 @@
+# Le dépôt a moins de 10 étoiles : l'offre gratuite de CodeRabbit ne relit pas ses PR
+# d'elle-même. Ce workflow poste la commande qui déclenche la revue. Pas de
+# pull_request_target ni de secret : les PR de forks et de Dependabot, dont le token
+# ne peut pas commenter, sont sautées (y commenter `@coderabbitai review` à la main).
+name: CodeRabbit
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    if: >-
+      !github.event.pull_request.draft
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - run: gh pr comment "$PR" --repo "$REPO" --body "@coderabbitai review"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
