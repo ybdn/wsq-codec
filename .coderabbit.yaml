@@ -36,8 +36,8 @@ reviews:
           except under `certified/`, which uses its pinned toolchain.
     - path: "certified/**"
       instructions: |
-        This is `wsq-certified`, the code an FBI certificate covers. Any change here, even a
-        comment, is a new version to certify:
+        This is `wsq-certified`, the code an FBI certificate would cover (not certified yet).
+        Any change here, even a comment, is a new version to certify:
         - Require a `version` bump in certified/Cargo.toml, a section in certified/CHANGELOG.md
           and the exact pins `wsq-certified = { version = "=X.Y.Z" }` updated in Cargo.toml and
           cli/Cargo.toml (Markdown-only changes excepted).
